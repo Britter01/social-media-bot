@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from core.models import Post, PostStatus
+from core.models import Post, PostStatus, Topic, TopicStatus
 
 
 def test_caption_with_hashtags_appends_and_prefixes_hash():
@@ -70,3 +70,40 @@ def test_from_row_tolerates_trailing_z():
     post = Post.from_row(row)
     assert post.scheduled_time is not None
     assert post.scheduled_time.year == 2026
+
+
+def test_topic_row_roundtrip_preserves_fields():
+    topic = Topic(
+        title="On-device AI assistants",
+        pillar="AI Guide",
+        platform="youtube",
+        summary="New phones ship local models.",
+        content_angle="Explain what runs on-device vs in the cloud.",
+        relevance_score=88,
+        rationale="Squarely on-brand and timely.",
+        sources=["https://example.com/a", "https://example.com/b"],
+    )
+    restored = Topic.from_row(topic.to_row())
+
+    assert restored.id == topic.id
+    assert restored.title == topic.title
+    assert restored.pillar == topic.pillar
+    assert restored.platform == topic.platform
+    assert restored.relevance_score == 88
+    assert restored.sources == topic.sources
+    assert restored.status == TopicStatus.NEW.value
+
+
+def test_topic_mark_transitions_status():
+    topic = Topic(title="x", pillar="Review", platform="instagram")
+    topic.mark(TopicStatus.USED)
+    assert topic.status == TopicStatus.USED.value
+
+
+def test_topic_to_post_seeds_a_draft():
+    topic = Topic(title="best earbuds 2026", pillar="Review", platform="instagram")
+    post = topic.to_post()
+    assert post.pillar == "Review"
+    assert post.platform == "instagram"
+    assert post.topic == "best earbuds 2026"
+    assert post.status == PostStatus.DRAFT.value

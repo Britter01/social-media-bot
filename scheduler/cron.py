@@ -30,6 +30,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from agents.content_agent import ContentAgent
 from agents.publisher_agent import PublisherAgent
+from agents.research_agent import ResearchAgent
 from agents.scheduler_agent import SchedulerAgent
 from agents.thumbnail_agent import ThumbnailAgent
 from agents.video_agent import VideoAgent
@@ -87,6 +88,50 @@ def run_content_pipeline() -> None:
                 logger.exception("Could not persist failure for post %s", post.id)
 
     logger.info("=== Content pipeline finished: %d post(s) scheduled ===", created)
+
+
+def run_research_pipeline() -> None:
+    """Discover trending topics, generate content for the best, and schedule.
+
+    The research agent finds and scores topics, persists them, and turns the
+    top picks into content-ready posts. Here we add media, pick a posting
+    slot, and persist each as a scheduled post — reusing the same
+    failure-isolated finalisation as the static content pipeline.
+    """
+    logger.info("=== Research pipeline starting ===")
+    try:
+        db = get_database()
+        content_agent = ContentAgent()
+        scheduler_agent = SchedulerAgent()
+        research_agent = ResearchAgent(content_agent=content_agent, db=db)
+    except Exception:
+        logger.exception("Research pipeline could not initialise; skipping run")
+        return
+
+    thumbnail_agent = _safe_init(ThumbnailAgent, "thumbnail")
+    video_agent = _safe_init(VideoAgent, "video")
+
+    try:
+        posts = research_agent.run()
+    except Exception:
+        logger.exception("Research pipeline failed during discovery; skipping run")
+        return
+
+    scheduled = 0
+    for post in posts:
+        try:
+            _generate_media(post, thumbnail_agent, video_agent)
+            scheduler_agent.schedule(post)
+            db.upsert(post)
+            scheduled += 1
+        except Exception:
+            logger.exception("Failed finalising researched post %s", post.id)
+            try:
+                db.update_status(post, PostStatus.FAILED, error="research pipeline error")
+            except Exception:
+                logger.exception("Could not persist failure for post %s", post.id)
+
+    logger.info("=== Research pipeline finished: %d post(s) scheduled ===", scheduled)
 
 
 def _generate_media(post: Post, thumbnail_agent, video_agent) -> None:
@@ -155,6 +200,17 @@ def _safe_init(agent_cls, label: str):
 def build_scheduler() -> BlockingScheduler:
     """Wire up the recurring jobs."""
     scheduler = BlockingScheduler(timezone=config.timezone)
+
+    # Research trending topics and schedule content from them at 05:30 local,
+    # ahead of the static content pipeline.
+    scheduler.add_job(
+        run_research_pipeline,
+        trigger=CronTrigger(hour=5, minute=30, timezone=config.timezone),
+        id="research_pipeline",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
 
     # Generate and schedule content once a day at 06:00 local.
     scheduler.add_job(

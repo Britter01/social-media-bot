@@ -103,6 +103,13 @@ class Config:
     log_level: str = "INFO"
     posts_per_run: int = 1
 
+    # --- Research agent -------------------------------------------------
+    # Minimum brand-relevance score (0-100) a topic must reach to be fed
+    # into the content agent. Topics below this are stored but not used.
+    min_topic_relevance: int = 70
+    # How many of the highest-scoring topics to turn into posts per run.
+    topics_per_run: int = 3
+
     # Content pillars and target platforms.
     content_pillars: list[str] = field(
         default_factory=lambda: [
@@ -120,6 +127,18 @@ class Config:
             "linkedin",
             "youtube",
             "tiktok",
+        ]
+    )
+
+    # Themes the research agent scans for trending topics. Free text — the
+    # model maps each topic onto one of the content pillars above.
+    research_categories: list[str] = field(
+        default_factory=lambda: [
+            "artificial intelligence",
+            "productivity",
+            "fitness technology",
+            "tech lifestyle",
+            "product reviews",
         ]
     )
 
@@ -156,6 +175,8 @@ class Config:
             dry_run=_get_bool("DRY_RUN", False),
             log_level=_get("LOG_LEVEL", "INFO"),
             posts_per_run=_get_int("POSTS_PER_RUN", 1),
+            min_topic_relevance=_get_int("MIN_TOPIC_RELEVANCE", 70),
+            topics_per_run=_get_int("TOPICS_PER_RUN", 3),
         )
 
     def require(self, *names: str) -> None:

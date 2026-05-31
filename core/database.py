@@ -25,6 +25,25 @@ Expected table (create once in the Supabase SQL editor):
     );
     create index if not exists posts_status_idx on posts (status);
     create index if not exists posts_scheduled_idx on posts (scheduled_time);
+
+And the topics table the research agent writes to:
+
+    create table if not exists topics (
+        id uuid primary key,
+        title text not null,
+        pillar text,
+        platform text,
+        summary text,
+        content_angle text,
+        relevance_score int default 0,
+        rationale text,
+        sources jsonb default '[]'::jsonb,
+        status text not null default 'new',
+        created_at timestamptz not null default now(),
+        updated_at timestamptz not null default now()
+    );
+    create index if not exists topics_status_idx on topics (status);
+    create index if not exists topics_score_idx on topics (relevance_score);
 """
 
 from __future__ import annotations
@@ -33,11 +52,12 @@ import logging
 from datetime import UTC, datetime
 
 from core.config import Config, config
-from core.models import Post, PostStatus
+from core.models import Post, PostStatus, Topic, TopicStatus
 
 logger = logging.getLogger(__name__)
 
 _TABLE = "posts"
+_TOPICS_TABLE = "topics"
 
 
 class Database:
@@ -162,6 +182,50 @@ class Database:
             return [Post.from_row(row) for row in (resp.data or [])]
         except Exception:
             logger.exception("Failed to query posts due for publishing")
+            raise
+
+    # --- Topics ----------------------------------------------------------
+
+    def insert_topic(self, topic: Topic) -> Topic:
+        """Insert a new researched topic row."""
+        try:
+            self._client.table(_TOPICS_TABLE).insert(topic.to_row()).execute()
+            logger.info(
+                "Inserted topic %s (%s, score=%s)",
+                topic.id,
+                topic.pillar,
+                topic.relevance_score,
+            )
+            return topic
+        except Exception:
+            logger.exception("Failed to insert topic %s", topic.id)
+            raise
+
+    def upsert_topic(self, topic: Topic) -> Topic:
+        """Insert or update a topic, bumping ``updated_at``."""
+        topic.updated_at = datetime.now(UTC)
+        try:
+            self._client.table(_TOPICS_TABLE).upsert(topic.to_row()).execute()
+            logger.debug("Upserted topic %s (status=%s)", topic.id, topic.status)
+            return topic
+        except Exception:
+            logger.exception("Failed to upsert topic %s", topic.id)
+            raise
+
+    def topics_by_status(self, status: TopicStatus, limit: int = 50) -> list[Topic]:
+        """Return topics in a given status, highest-scoring first."""
+        try:
+            resp = (
+                self._client.table(_TOPICS_TABLE)
+                .select("*")
+                .eq("status", status.value)
+                .order("relevance_score", desc=True)
+                .limit(limit)
+                .execute()
+            )
+            return [Topic.from_row(row) for row in (resp.data or [])]
+        except Exception:
+            logger.exception("Failed to query topics by status %s", status.value)
             raise
 
 

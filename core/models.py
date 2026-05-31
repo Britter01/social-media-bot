@@ -46,6 +46,15 @@ class PostStatus(StrEnum):
     FAILED = "failed"
 
 
+class TopicStatus(StrEnum):
+    """Lifecycle of a researched topic before it becomes a post."""
+
+    NEW = "new"  # freshly discovered by the research agent
+    SELECTED = "selected"  # passed the relevance bar, queued for content
+    USED = "used"  # a post was generated from it
+    REJECTED = "rejected"  # discarded (below the relevance threshold)
+
+
 @dataclass
 class Brand:
     """The brand the system creates content for."""
@@ -146,6 +155,79 @@ class Post:
             published_time=_parse(row.get("published_time")),
             platform_post_id=row.get("platform_post_id"),
             error=row.get("error"),
+            created_at=_parse(row.get("created_at")) or datetime.now(UTC),
+            updated_at=_parse(row.get("updated_at")) or datetime.now(UTC),
+        )
+
+
+@dataclass
+class Topic:
+    """A trending topic the research agent surfaced and scored.
+
+    Topics are the upstream of posts: the research agent discovers them
+    via web search, scores each for fit with the brand, and decides what
+    to make and where. The best ones are handed to the content agent,
+    which turns a ``Topic`` into a ``Post`` (pillar + platform + topic).
+    """
+
+    title: str
+    pillar: str
+    platform: str
+    summary: str = ""
+    content_angle: str = ""  # what to actually make from this topic
+    relevance_score: int = 0  # 0-100, brand fit as judged by the model
+    rationale: str = ""  # why it scored the way it did
+    sources: list[str] = field(default_factory=list)  # supporting URLs
+    status: str = TopicStatus.NEW.value
+
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+    # --- Convenience -----------------------------------------------------
+
+    def mark(self, status: TopicStatus) -> None:
+        """Transition status and bump ``updated_at``."""
+        self.status = status.value
+        self.updated_at = datetime.now(UTC)
+
+    def to_post(self) -> Post:
+        """Create a fresh draft ``Post`` seeded from this topic."""
+        return Post(pillar=self.pillar, platform=self.platform, topic=self.title)
+
+    # --- Serialisation ---------------------------------------------------
+
+    def to_row(self) -> dict[str, Any]:
+        """Serialise to a Supabase-friendly dict (ISO timestamps)."""
+        return {
+            "id": self.id,
+            "title": self.title,
+            "pillar": self.pillar,
+            "platform": self.platform,
+            "summary": self.summary,
+            "content_angle": self.content_angle,
+            "relevance_score": self.relevance_score,
+            "rationale": self.rationale,
+            "sources": self.sources,
+            "status": self.status,
+            "created_at": _iso(self.created_at),
+            "updated_at": _iso(self.updated_at),
+        }
+
+    @classmethod
+    def from_row(cls, row: dict[str, Any]) -> Topic:
+        """Rehydrate a ``Topic`` from a Supabase row."""
+        return cls(
+            id=row.get("id") or str(uuid.uuid4()),
+            title=row["title"],
+            pillar=row.get("pillar", ""),
+            platform=row.get("platform", ""),
+            summary=row.get("summary", ""),
+            content_angle=row.get("content_angle", ""),
+            relevance_score=int(row.get("relevance_score") or 0),
+            rationale=row.get("rationale", ""),
+            sources=list(row.get("sources") or []),
+            status=row.get("status", TopicStatus.NEW.value),
             created_at=_parse(row.get("created_at")) or datetime.now(UTC),
             updated_at=_parse(row.get("updated_at")) or datetime.now(UTC),
         )

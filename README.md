@@ -2,7 +2,7 @@
 
 Automated content pipeline for **Brite Tech Lifestyle** (founder: Dean Britter — _"Technology, beautifully lived."_).
 
-It generates captions and hashtags with the Claude API, thumbnails with Google Imagen 4 Fast, short videos with HeyGen (cloned voice), picks an optimal posting time per platform, and publishes to Instagram, X/Twitter, LinkedIn, YouTube, and TikTok — all on a schedule.
+It researches trending topics with the Claude API's web search tool, generates captions and hashtags with the Claude API, thumbnails with Google Imagen 4 Fast, short videos with HeyGen (cloned voice), picks an optimal posting time per platform, and publishes to Instagram, X/Twitter, LinkedIn, YouTube, and TikTok — all on a schedule.
 
 ---
 
@@ -11,6 +11,9 @@ It generates captions and hashtags with the Claude API, thumbnails with Google I
 ```
                         scheduler/cron.py  (APScheduler worker)
                                  │
+   daily 05:30 ──▶ ResearchAgent (Claude + web search)
+                     │  finds + scores trending topics → `topics` row
+                     ▼  hands the best to ↓
    daily 06:00 ─────────────────┤                          every 5 min
                                 ▼                                 │
    ContentAgent  ──▶  Thumbnail/Video agents  ──▶  SchedulerAgent ▼
@@ -19,7 +22,7 @@ It generates captions and hashtags with the Claude API, thumbnails with Google I
         └──────────────── persisted to Supabase as a `posts` row ──┘
 ```
 
-Each post moves through statuses: `draft → content_ready → media_ready → scheduled → publishing → published` (or `failed`). The publisher loop picks up any post whose `scheduled_time` has passed.
+The **research agent** runs first: it uses Claude's server-side web search tool to find trending topics across the brand's themes, scores each for brand fit with structured outputs, stores them in the `topics` table, and turns the highest-scoring ones into draft posts. From there each post moves through statuses: `draft → content_ready → media_ready → scheduled → publishing → published` (or `failed`). The publisher loop picks up any post whose `scheduled_time` has passed. (The 06:00 content pipeline also runs independently as a fallback source of posts.)
 
 ### Content pillars
 AI Guide · Tech Lifestyle · Productivity · Fitness Tech · Review
@@ -34,10 +37,12 @@ Clear, confident, warm. Never patronising. Short sentences. (Baked into the cach
 ```
 core/
   config.py        Loads + validates all env vars; the Config singleton.
-  models.py        Post / Brand data models, Pillar/Platform/Status enums.
-  database.py      Supabase CRUD for the `posts` table.
+  models.py        Post / Topic / Brand data models, Pillar/Platform/Status enums.
+  database.py      Supabase CRUD for the `posts` and `topics` tables.
   storage.py       Supabase Storage uploader (public URLs for media).
 agents/
+  research_agent.py   Trending-topic discovery + scoring (Claude web search
+                      tool, structured outputs); seeds the content agent.
   content_agent.py    Captions + hashtags (Claude, adaptive thinking,
                       prompt caching, structured outputs).
   thumbnail_agent.py  Images via Imagen 4 Fast (imagen-4.0-fast-generate-001).
@@ -134,7 +139,7 @@ Runs one post through all four stages with publishing forced to dry-run. Stages 
 python scheduler/cron.py
 ```
 
-This is the long-running process. It generates and schedules content daily at 06:00 (brand timezone) and publishes due posts every 5 minutes. Adjust the cadence in `scheduler/cron.py` (`build_scheduler`).
+This is the long-running process. It researches trending topics and seeds content daily at 05:30, generates and schedules a fallback batch at 06:00 (brand timezone), and publishes due posts every 5 minutes. Adjust the cadence in `scheduler/cron.py` (`build_scheduler`).
 
 ---
 

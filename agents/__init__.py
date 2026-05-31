@@ -1,1 +1,1 @@
-"""Agents package: content, thumbnail, video, publishing, and scheduling."""
+"""Agents package: research, content, thumbnail, video, publishing, scheduling."""
