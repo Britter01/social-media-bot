@@ -94,10 +94,13 @@ class CarouselAgent:
         Returns a new Post (different id) with post_type='carousel' and
         slides populated. The source post is not modified.
         """
+        import uuid as _uuid
+        carousel_id = str(_uuid.uuid4())  # fixed before image generation so paths are stable
         plan = self._plan_carousel(source)
-        slides_data = self._generate_images(source, plan)
+        slides_data = self._generate_images(carousel_id, source, plan)
 
         carousel = Post(
+            id=carousel_id,
             pillar=source.pillar,
             platform=source.platform,
             topic=source.topic,
@@ -155,7 +158,7 @@ class CarouselAgent:
         )
         return plan
 
-    def _generate_images(self, post: Post, plan: CarouselPlan) -> list[dict]:
+    def _generate_images(self, carousel_id: str, post: Post, plan: CarouselPlan) -> list[dict]:
         """Generate and upload one image per slide; return slide dicts."""
         from google.genai import types
 
@@ -208,7 +211,7 @@ class CarouselAgent:
                     logger.warning("Imagen returned no image for slide %d; skipping", i)
                     continue
                 image_bytes = images[0].image.image_bytes
-                image_url = self._upload(post.id, i, image_bytes)
+                image_url = self._upload(carousel_id, i, image_bytes)
                 result.append({
                     "headline": slide["headline"],
                     "body": slide["body"],
