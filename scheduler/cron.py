@@ -145,15 +145,16 @@ def run_approved_pipeline() -> None:
         return
 
     logger.info("Scheduling %d post(s) from approved topics", len(posts))
-    scheduled = _finalise_posts(posts, db, scheduler_agent)
+    scheduled = _finalise_posts(posts, db, scheduler_agent, persist_insert=False)
     logger.info("Approved-topic pipeline finished: %d post(s) scheduled", scheduled)
 
 
-def _finalise_posts(posts: list[Post], db, scheduler_agent) -> int:
+def _finalise_posts(posts: list[Post], db, scheduler_agent, *, persist_insert: bool = True) -> int:
     """Add media, pick a slot, and persist each post; return the count scheduled.
 
     Failure-isolated per post — one failing post is marked failed and the
-    rest continue.
+    rest continue. Set persist_insert=False when the posts are already in the
+    database (e.g. inserted by generate_for_approved).
     """
     thumbnail_agent = _safe_init(ThumbnailAgent, "thumbnail")
     video_agent = _safe_init(VideoAgent, "video")
@@ -163,7 +164,10 @@ def _finalise_posts(posts: list[Post], db, scheduler_agent) -> int:
         try:
             _generate_media(post, thumbnail_agent, video_agent)
             scheduler_agent.schedule(post)
-            db.upsert(post)
+            if persist_insert:
+                db.insert(post)
+            else:
+                db.upsert(post)
             scheduled += 1
         except Exception:
             logger.exception("Failed finalising post %s", post.id)
