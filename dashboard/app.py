@@ -32,7 +32,6 @@ def get_db():
         key = os.getenv("SUPABASE_KEY", "")
     if not url or not key:
         st.error("SUPABASE_URL and SUPABASE_KEY must be set.")
-        st.info(f"Secrets available: {list(st.secrets.keys()) if hasattr(st, 'secrets') else 'none'}")
         st.stop()
     return create_client(url, key)
 
