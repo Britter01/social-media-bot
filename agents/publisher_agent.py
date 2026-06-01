@@ -78,6 +78,7 @@ class PublisherAgent:
 
         dispatch = {
             Platform.INSTAGRAM.value: self._publish_instagram,
+            Platform.FACEBOOK.value: self._publish_facebook,
             Platform.TWITTER.value: self._publish_twitter,
             Platform.LINKEDIN.value: self._publish_linkedin,
             Platform.YOUTUBE.value: self._publish_youtube,
@@ -133,6 +134,35 @@ class PublisherAgent:
             )
             publish.raise_for_status()
             return publish.json().get("id", container_id)
+
+    # --- Facebook Pages (Graph API) -------------------------------------
+
+    def _publish_facebook(self, post: Post) -> str:
+        self._cfg.require("facebook_page_id", "instagram_access_token")
+        page_id = self._cfg.facebook_page_id
+        token = self._cfg.instagram_access_token
+        base = f"https://graph.facebook.com/v19.0/{page_id}"
+
+        with httpx.Client(timeout=60.0) as client:
+            if post.thumbnail_url:
+                resp = client.post(
+                    f"{base}/photos",
+                    data={
+                        "url": post.thumbnail_url,
+                        "caption": post.caption_with_hashtags,
+                        "access_token": token,
+                    },
+                )
+            else:
+                resp = client.post(
+                    f"{base}/feed",
+                    data={
+                        "message": post.caption_with_hashtags,
+                        "access_token": token,
+                    },
+                )
+            resp.raise_for_status()
+            return resp.json().get("id", "")
 
     # --- X / Twitter (API v2) -------------------------------------------
 

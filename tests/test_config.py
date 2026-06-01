@@ -38,14 +38,14 @@ def test_from_env_reads_values(monkeypatch):
 def test_configured_platforms_filters_to_credentialed(base_config):
     import dataclasses
 
-    # Only instagram + twitter credentials present.
+    # Only instagram + facebook + twitter credentials present.
     cfg = dataclasses.replace(
         base_config,
         linkedin_access_token=None,
         youtube_refresh_token=None,
         tiktok_access_token=None,
     )
-    assert cfg.configured_platforms() == ["instagram", "twitter"]
+    assert cfg.configured_platforms() == ["instagram", "facebook", "twitter"]
 
 
 def test_default_pillars_and_platforms():

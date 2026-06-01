@@ -136,6 +136,7 @@ def base_config():
         supabase_bucket="media",
         instagram_access_token="ig-token",
         instagram_business_account_id="ig-account",
+        facebook_page_id="fb-page-123",
         twitter_api_key="tw-key",
         twitter_api_secret="tw-secret",
         twitter_access_token="tw-token",

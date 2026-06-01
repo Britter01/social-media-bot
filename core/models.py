@@ -28,6 +28,7 @@ class Platform(StrEnum):
     """Supported publishing destinations."""
 
     INSTAGRAM = "instagram"
+    FACEBOOK = "facebook"
     TWITTER = "twitter"
     LINKEDIN = "linkedin"
     YOUTUBE = "youtube"

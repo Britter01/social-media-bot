@@ -89,6 +89,7 @@ class Config:
     # --- Platform credentials -------------------------------------------
     instagram_access_token: str | None = None
     instagram_business_account_id: str | None = None
+    facebook_page_id: str | None = None
 
     twitter_api_key: str | None = None
     twitter_api_secret: str | None = None
@@ -134,6 +135,7 @@ class Config:
     platforms: list[str] = field(
         default_factory=lambda: [
             "instagram",
+            "facebook",
             "twitter",
             "linkedin",
             "youtube",
@@ -173,6 +175,7 @@ class Config:
             supabase_bucket=_get("SUPABASE_BUCKET", "media"),
             instagram_access_token=_get("INSTAGRAM_ACCESS_TOKEN"),
             instagram_business_account_id=_get("INSTAGRAM_BUSINESS_ACCOUNT_ID"),
+            facebook_page_id=_get("FACEBOOK_PAGE_ID"),
             twitter_api_key=_get("TWITTER_API_KEY"),
             twitter_api_secret=_get("TWITTER_API_SECRET"),
             twitter_access_token=_get("TWITTER_ACCESS_TOKEN"),
@@ -212,6 +215,8 @@ class Config:
         available = []
         for platform in self.platforms:
             if platform == "instagram" and self.instagram_access_token:
+                available.append(platform)
+            elif platform == "facebook" and self.facebook_page_id and self.instagram_access_token:
                 available.append(platform)
             elif platform == "twitter" and self.twitter_api_key:
                 available.append(platform)

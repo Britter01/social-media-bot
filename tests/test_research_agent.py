@@ -77,7 +77,7 @@ def test_discover_uses_web_search_tool_and_models(base_config):
     agent.discover()
 
     _, kwargs = agent._client.messages.create.call_args
-    assert kwargs["tools"] == [{"type": "web_search_20260209", "name": "web_search"}]
+    assert kwargs["tools"] == [{"type": "web_search_20260209", "name": "web_search", "allowed_callers": ["direct"]}]
     # Discovery runs on the fast (Haiku) tier — and must not send effort,
     # which Haiku 4.5 rejects.
     assert kwargs["model"] == base_config.model_fast
