@@ -24,10 +24,15 @@ st.set_page_config(
 @st.cache_resource
 def get_db():
     # Streamlit Cloud exposes secrets via st.secrets; local dev uses .env
-    url = st.secrets.get("SUPABASE_URL") or os.getenv("SUPABASE_URL", "")
-    key = st.secrets.get("SUPABASE_KEY") or os.getenv("SUPABASE_KEY", "")
+    try:
+        url = st.secrets["SUPABASE_URL"]
+        key = st.secrets["SUPABASE_KEY"]
+    except (KeyError, FileNotFoundError):
+        url = os.getenv("SUPABASE_URL", "")
+        key = os.getenv("SUPABASE_KEY", "")
     if not url or not key:
         st.error("SUPABASE_URL and SUPABASE_KEY must be set.")
+        st.info(f"Secrets available: {list(st.secrets.keys()) if hasattr(st, 'secrets') else 'none'}")
         st.stop()
     return create_client(url, key)
 
