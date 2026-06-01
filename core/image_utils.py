@@ -1,14 +1,15 @@
 """Image post-processing — brand overlay compositing via Pillow.
 
-Applies the Brite Tech Lifestyle wordmark to every Imagen-generated image
-so branding is always correct and consistent, regardless of what the image
-model renders in the photo itself.
+Applies the Brite Tech Lifestyle wordmark directly onto Imagen-generated
+photos. No background bar — just the brand text floating over the image
+with a subtle drop shadow for legibility on any background.
 
-Overlay design (matches brand-kit footer / platform wordmark spec):
-  • Pure black bar at the bottom of the image
+Overlay design (matches brand-kit typography spec):
   • "Brite" — Figtree Bold 700, white, tight tracking (−4%)
-  • "TECH LIFESTYLE" — Figtree Regular, UPPERCASE, wide tracking (+22%), white 28% opacity
-  • Thin Brite Blue (#0066CC) rule above the bar — matches YouTube thumbnail spec
+  • "TECH LIFESTYLE" — Figtree Regular, UPPERCASE, wide tracking (+22%),
+    white at 55% opacity
+  • Soft dark drop shadow on both lines for contrast on bright backgrounds
+  • Positioned bottom-centre with comfortable padding
 
 Fonts are downloaded from the jsDelivr/Fontsource CDN on first use and cached
 in the system temp directory so Railway containers pick them up automatically.
@@ -26,26 +27,27 @@ logger = logging.getLogger(__name__)
 # --------------------------------------------------------------------------- #
 # Brand tokens (from brand-kit CSS variables)                                 #
 # --------------------------------------------------------------------------- #
-_BLACK       = (0, 0, 0)
-_WHITE       = (255, 255, 255)
-_BRITE_BLUE  = (0, 102, 204)        # #0066CC
+_WHITE = (255, 255, 255)
+_SHADOW = (0, 0, 0)
 
 # Wordmark opacities
-_BRITE_ALPHA = 255                  # "Brite" — full white
-_SUB_ALPHA   = 71                   # "TECH LIFESTYLE" — white at ~28%
+_BRITE_ALPHA  = 230   # "Brite" — near-full white, slightly soft
+_SUB_ALPHA    = 140   # "TECH LIFESTYLE" — white at ~55% opacity
 
-# Bar dimensions (fixed px — consistent across all aspect ratios)
-_BAR_H       = 88                   # total bar height
-_RULE_H      = 2                    # blue accent rule above bar
-_PAD_X       = 24                   # horizontal padding from edge
+# Shadow
+_SHADOW_ALPHA  = 120  # shadow darkness
+_SHADOW_OFFSET = 1    # pixels offset for drop shadow
+
+# Bottom padding from image edge
+_PAD_BOTTOM = 28
 
 # Font sizes
-_SIZE_BRITE  = 36                   # "Brite" display size
-_SIZE_SUB    = 11                   # "TECH LIFESTYLE" size
+_SIZE_BRITE = 36
+_SIZE_SUB   = 11
 
 # Letter-spacing simulation (extra pixels between characters)
-_TRACKING_BRITE = -1                # slight tightening for the hero name
-_TRACKING_SUB   = 3                 # wide tracking for the subtitle
+_TRACKING_BRITE = -1   # slight tightening
+_TRACKING_SUB   = 3    # wide tracking for subtitle
 
 # --------------------------------------------------------------------------- #
 # Font loading                                                                 #
@@ -128,16 +130,12 @@ def add_brand_overlay(
     tagline: str = "",
     bar_opacity: int = 255,
 ) -> bytes:
-    """Composite the Brite Tech Lifestyle wordmark onto the bottom of an image.
+    """Composite the Brite Tech Lifestyle wordmark onto an image.
 
-    Args:
-        image_bytes: Raw PNG/JPEG bytes from Imagen.
-        brand_name:  Ignored — overlay always uses the canonical two-line wordmark.
-        tagline:     Ignored — the bar is kept clean per brand-kit footer spec.
-        bar_opacity: Alpha for the black bar (default 255 = solid).
+    Text floats directly on the photo — no background bar.
+    A soft drop shadow ensures legibility on bright or busy backgrounds.
 
-    Returns:
-        PNG bytes with the brand wordmark applied.
+    Returns PNG bytes with the wordmark applied.
     """
     try:
         from PIL import Image, ImageDraw
@@ -147,58 +145,39 @@ def add_brand_overlay(
 
     img = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
     width, height = img.size
-    total_h = _BAR_H + _RULE_H
 
     font_brite = _get_font("figtree-bold",    _SIZE_BRITE)
     font_sub   = _get_font("figtree-regular", _SIZE_SUB)
 
-    # ── Build the overlay layer ──────────────────────────────────────────────
-    overlay = Image.new("RGBA", (width, total_h), (0, 0, 0, 0))
+    overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw    = ImageDraw.Draw(overlay)
 
-    # Solid black bar
-    draw.rectangle(
-        [(0, _RULE_H), (width, total_h)],
-        fill=(*_BLACK, bar_opacity),
-    )
-
-    # Brite Blue accent rule at top edge (matches YouTube thumbnail spec)
-    draw.rectangle(
-        [(0, 0), (width, _RULE_H)],
-        fill=(*_BRITE_BLUE, 255),
-    )
-
-    # ── "Brite" — centred, bold, white ──────────────────────────────────────
-    brite_w = _text_width(font_brite, "Brite", _TRACKING_BRITE)
-    brite_x = (width - brite_w) // 2
-    brite_y = _RULE_H + 10                          # top padding inside bar
-
-    _draw_tracked(
-        draw,
-        (brite_x, brite_y),
-        "Brite",
-        font_brite,
-        (*_WHITE, _BRITE_ALPHA),
-        _TRACKING_BRITE,
-    )
-
-    # ── "TECH LIFESTYLE" — centred, wide-tracked, faded ────────────────────
+    # ── "TECH LIFESTYLE" — small, wide-tracked, positioned first ────────────
     sub_text = "TECH LIFESTYLE"
     sub_w    = _text_width(font_sub, sub_text, _TRACKING_SUB)
     sub_x    = (width - sub_w) // 2
-    sub_y    = brite_y + _SIZE_BRITE + 6            # below "Brite" with gap
+    sub_y    = height - _PAD_BOTTOM - _SIZE_SUB
 
-    _draw_tracked(
-        draw,
-        (sub_x, sub_y),
-        sub_text,
-        font_sub,
-        (*_WHITE, _SUB_ALPHA),
-        _TRACKING_SUB,
-    )
+    # Shadow
+    _draw_tracked(draw, (sub_x + _SHADOW_OFFSET, sub_y + _SHADOW_OFFSET),
+                  sub_text, font_sub, (*_SHADOW, _SHADOW_ALPHA), _TRACKING_SUB)
+    # Text
+    _draw_tracked(draw, (sub_x, sub_y),
+                  sub_text, font_sub, (*_WHITE, _SUB_ALPHA), _TRACKING_SUB)
 
-    # ── Composite onto original ──────────────────────────────────────────────
-    img.paste(overlay, (0, height - total_h), overlay)
+    # ── "Brite" — bold, above subtitle ──────────────────────────────────────
+    brite_w = _text_width(font_brite, "Brite", _TRACKING_BRITE)
+    brite_x = (width - brite_w) // 2
+    brite_y = sub_y - _SIZE_BRITE - 4
+
+    # Shadow
+    _draw_tracked(draw, (brite_x + _SHADOW_OFFSET, brite_y + _SHADOW_OFFSET),
+                  "Brite", font_brite, (*_SHADOW, _SHADOW_ALPHA), _TRACKING_BRITE)
+    # Text
+    _draw_tracked(draw, (brite_x, brite_y),
+                  "Brite", font_brite, (*_WHITE, _BRITE_ALPHA), _TRACKING_BRITE)
+
+    img = Image.alpha_composite(img, overlay)
 
     out = io.BytesIO()
     img.convert("RGB").save(out, format="PNG", optimize=True)

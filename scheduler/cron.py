@@ -244,6 +244,86 @@ def _generate_media(post: Post, thumbnail_agent, video_agent) -> None:
             logger.exception("Video generation failed for post %s", post.id)
 
 
+def run_image_refresh() -> None:
+    """Regenerate thumbnails and carousel slides that are missing the brand overlay.
+
+    Runs nightly at 02:00 — after the Imagen quota resets (midnight UTC) —
+    to pick up any slides that were skipped due to rate limits during the day.
+    Only processes posts that are still scheduled (not yet published).
+    """
+    logger.info("=== Image refresh starting ===")
+    try:
+        from supabase import create_client
+        import uuid as _uuid
+        from core.models import Post
+
+        sb = create_client(config.supabase_url, config.supabase_key)
+        thumbnail_agent = _safe_init(ThumbnailAgent, "thumbnail")
+        carousel_agent  = _safe_init(CarouselAgent,  "carousel")
+
+        refreshed = 0
+
+        # Carousel slides — re-plan and re-generate for scheduled carousels
+        if carousel_agent:
+            carousels = (
+                sb.table("posts")
+                .select("*")
+                .eq("post_type", "carousel")
+                .eq("status", "scheduled")
+                .eq("platform", "instagram")
+                .execute()
+                .data or []
+            )
+            for c in carousels:
+                try:
+                    source = Post(
+                        pillar=c["pillar"], platform=c["platform"],
+                        topic=c.get("topic", ""),
+                        hashtags=list(c.get("hashtags") or []),
+                    )
+                    new_id = str(_uuid.uuid4())
+                    plan   = carousel_agent._plan_carousel(source)
+                    slides = carousel_agent._generate_images(new_id, source, plan)
+                    sb.table("posts").update({
+                        "title": plan.cover_headline,
+                        "slides": slides,
+                        "thumbnail_url": slides[0]["image_url"] if slides else c.get("thumbnail_url"),
+                    }).eq("id", c["id"]).execute()
+                    refreshed += 1
+                    logger.info("Refreshed carousel %s (%d slides)", c["id"][:8], len(slides))
+                except Exception:
+                    logger.exception("Failed refreshing carousel %s", c.get("id", "?")[:8])
+
+        # Standard post thumbnails
+        if thumbnail_agent:
+            std_posts = (
+                sb.table("posts")
+                .select("*")
+                .eq("post_type", "standard")
+                .eq("status", "scheduled")
+                .execute()
+                .data or []
+            )
+            for p in std_posts:
+                try:
+                    post_obj = Post(
+                        id=p["id"], pillar=p["pillar"], platform=p["platform"],
+                        topic=p.get("topic", ""), title=p.get("title", ""),
+                    )
+                    thumbnail_agent.generate(post_obj)
+                    sb.table("posts").update(
+                        {"thumbnail_url": post_obj.thumbnail_url}
+                    ).eq("id", p["id"]).execute()
+                    refreshed += 1
+                    logger.info("Refreshed thumbnail for post %s", p["id"][:8])
+                except Exception:
+                    logger.exception("Failed refreshing thumbnail for post %s", p.get("id", "?")[:8])
+
+        logger.info("=== Image refresh finished: %d asset(s) updated ===", refreshed)
+    except Exception:
+        logger.exception("Image refresh could not initialise; skipping run")
+
+
 def run_publisher() -> None:
     """Publish every post whose scheduled time has arrived."""
     try:
@@ -334,6 +414,16 @@ def build_scheduler() -> BlockingScheduler:
         max_instances=1,
         coalesce=True,
         misfire_grace_time=300,
+    )
+
+    # Refresh images nightly at 02:00 — after the Imagen quota resets.
+    scheduler.add_job(
+        run_image_refresh,
+        trigger=CronTrigger(hour=2, minute=0, timezone=config.timezone),
+        id="image_refresh",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
     )
     return scheduler
 
