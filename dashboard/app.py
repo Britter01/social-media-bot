@@ -45,6 +45,30 @@ const css = `
 const style = document.createElement('style');
 style.textContent = css;
 window.parent.document.head.appendChild(style);
+
+// Align "TECH LIFESTYLE" to exactly match the width of "Brite"
+// Must measure as inline to get true text width (display:block returns container width)
+function alignBriteSub() {
+  const brite = window.parent.document.querySelector('.btl-brite');
+  const sub   = window.parent.document.querySelector('.btl-sub');
+  if (!brite || !sub) return;
+  sub.style.letterSpacing = '0px';
+  sub.style.marginRight   = '0px';
+  const briteW = brite.getBoundingClientRect().width;
+  sub.style.display = 'inline';
+  const subW = sub.getBoundingClientRect().width;
+  sub.style.display = 'block';
+  const chars = sub.textContent.trim().length;
+  if (!chars || !briteW || !subW) return;
+  const ls = (briteW - subW) / chars;
+  sub.style.letterSpacing = ls + 'px';
+  sub.style.marginRight   = (-ls) + 'px';
+}
+document.fonts.ready.then(function() {
+  alignBriteSub();
+  setTimeout(alignBriteSub, 800);
+});
+window.parent.addEventListener('resize', alignBriteSub);
 </script>
 """, height=0)
 
@@ -138,8 +162,8 @@ st.markdown(f"""
             box-sizing:border-box;width:100%">
   <div style="display:flex;align-items:center;gap:24px">
     <div style="line-height:1">
-      <div style="font-size:32px;font-weight:800;letter-spacing:-0.045em;color:#fff">Brite</div>
-      <div style="font-size:8px;font-weight:300;letter-spacing:0.28em;color:rgba(255,255,255,0.35);text-transform:uppercase;margin-top:3px">Tech Lifestyle</div>
+      <div class="btl-brite" style="font-size:32px;font-weight:800;letter-spacing:-0.045em;color:#fff">Brite</div>
+      <div class="btl-sub" style="font-size:8px;font-weight:300;color:rgba(255,255,255,0.35);text-transform:uppercase;margin-top:3px;display:block">Tech Lifestyle</div>
     </div>
     <div style="width:1px;height:36px;background:rgba(255,255,255,0.1)"></div>
     <div>
