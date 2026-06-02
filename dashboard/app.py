@@ -133,11 +133,11 @@ now_utc = datetime.now(UTC)
 # Black branded nav bar
 col_logo, col_hdr, col_btn = st.columns([2, 5, 1])
 with col_logo:
-    st.markdown(f"""
-    <div style="background:#000;border-radius:14px;padding:12px 20px;margin-top:4px;
-                display:flex;flex-direction:column;justify-content:center;min-height:68px">
-      <div style="font-size:26px;font-weight:800;letter-spacing:-0.045em;color:#fff;line-height:1">Brite</div>
-      <div style="font-size:8px;font-weight:300;letter-spacing:0.25em;color:rgba(255,255,255,0.4);text-transform:uppercase;margin-top:3px">Tech Lifestyle</div>
+    st.markdown("""
+    <div style="background:#000000;border-radius:14px;padding:14px 20px 12px 20px;
+                display:inline-block;width:100%;box-sizing:border-box;margin-top:2px">
+      <span style="font-size:28px;font-weight:800;letter-spacing:-0.045em;color:#ffffff;display:block;line-height:1.1">Brite</span>
+      <span style="font-size:8px;font-weight:300;letter-spacing:0.25em;color:rgba(255,255,255,0.4);text-transform:uppercase;display:block;margin-top:3px">Tech Lifestyle</span>
     </div>""", unsafe_allow_html=True)
 with col_hdr:
     st.markdown(f"""
@@ -208,53 +208,59 @@ def _sched_str(p):
 
 def _post_card(post: dict, time_str: str = "", time_label: str = "") -> None:
     is_carousel = post.get("post_type") == "carousel"
-    slides = post.get("slides") or []
-    platform = post.get("platform", "")
+    slides      = post.get("slides") or []
+    platform    = post.get("platform", "")
+    title       = post.get("title") or post.get("topic") or "Untitled"
+    pillar      = post.get("pillar") or "—"
+    caption     = post.get("caption") or ""
+    hashtags    = post.get("hashtags") or []
+    plat_color  = PLATFORM_COLORS.get(platform.lower(), "#6E6E73")
+    sched_color = "#10B981" if time_label == "scheduled" else "#059669"
+    sched_icon  = "📅" if time_label == "scheduled" else "📢"
+
+    # Image
     url = post.get("thumbnail_url", "")
     if url:
-        if not url.endswith(".png"):
-            url += ".png"
-        st.image(url, use_container_width=True)
+        st.image(url if url.endswith(".png") else url + ".png", use_container_width=True)
     else:
-        st.markdown("<div style='background:#F5F5F7;border-radius:8px;height:100px;"
-                    "display:flex;align-items:center;justify-content:center;"
-                    "color:#A1A1A6;font-size:12px'>No image</div>", unsafe_allow_html=True)
+        st.markdown("<div style='background:#F5F5F7;border-radius:8px;height:90px;display:flex;"
+                    "align-items:center;justify-content:center;color:#A1A1A6;font-size:12px'>"
+                    "No image</div>", unsafe_allow_html=True)
 
-    meta = []
+    # Info block — all inline styles, immune to Streamlit theming
+    pills = ""
     if platform:
-        meta.append(_platform_pill(platform))
+        pills += f"<span style='background:{plat_color}18;color:{plat_color};border-radius:9999px;padding:2px 10px;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase'>{platform}</span> "
     if is_carousel:
-        meta.append(f"<span style='color:#7C3AED;font-size:11px;font-weight:700'>🎠 {len(slides)} slides</span>")
+        pills += f"<span style='color:#7C3AED;font-size:11px;font-weight:700'>🎠 {len(slides)} slides</span> "
     if time_str:
-        c = "#10B981" if time_label == "scheduled" else "#059669"
-        meta.append(f"<span style='color:{c};font-size:11px;font-weight:600'>{'📅' if time_label=='scheduled' else '📢'} {time_str}</span>")
-    if meta:
-        st.markdown(" &nbsp; ".join(meta), unsafe_allow_html=True)
+        pills += f"<span style='color:{sched_color};font-size:11px;font-weight:600'>{sched_icon} {time_str}</span>"
 
-    title = post.get("title") or post.get("topic") or "Untitled"
-    pillar = post.get("pillar", "—")
-    st.markdown(f"<div style='font-size:14px;font-weight:700;color:#1D1D1F;margin:6px 0 2px;line-height:1.35'>{title}</div>", unsafe_allow_html=True)
-    st.markdown(f"<div style='font-size:12px;color:#6E6E73;margin-bottom:4px'>{pillar}</div>", unsafe_allow_html=True)
+    st.markdown(f"""
+    <div style='font-family:sans-serif;padding:6px 2px 4px'>
+      <div style='margin-bottom:5px'>{pills}</div>
+      <div style='font-size:14px;font-weight:700;color:#1D1D1F;line-height:1.35;margin-bottom:3px'>{title}</div>
+      <div style='font-size:12px;color:#6E6E73'>{pillar}</div>
+    </div>
+    """, unsafe_allow_html=True)
 
+    # Expandable caption / slides
     if is_carousel and slides:
         with st.expander(f"View {len(slides)} slides"):
             for j, slide in enumerate(slides):
                 role = slide.get("role", "")
-                tag = " *(cover)*" if role == "cover" else " *(CTA)*" if role == "cta" else ""
-                st.markdown(f"<div style='font-weight:700;color:#1D1D1F'>{j+1}. {slide.get('headline','')}{tag}</div>", unsafe_allow_html=True)
-                st.markdown(f"<div style='font-size:13px;color:#6E6E73'>{slide.get('body','')}</div>", unsafe_allow_html=True)
+                tag  = " (cover)" if role == "cover" else " (CTA)" if role == "cta" else ""
+                st.markdown(f"<div style='font-weight:700;color:#1D1D1F;font-size:13px'>{j+1}. {slide.get('headline','')}{tag}</div>", unsafe_allow_html=True)
+                st.markdown(f"<div style='font-size:12px;color:#6E6E73;margin-bottom:6px'>{slide.get('body','')}</div>", unsafe_allow_html=True)
                 img = slide.get("image_url", "")
                 if img:
                     st.image(img if img.endswith(".png") else img + ".png", use_container_width=True)
                 st.divider()
-    elif post.get("caption"):
+    elif caption:
         with st.expander("Caption"):
-            st.write(post["caption"])
-            if post.get("hashtags"):
-                st.caption(" ".join(f"#{h}" for h in post["hashtags"]))
-
-    if post.get("platform_post_id") and post["platform_post_id"] != "dry-run":
-        st.caption(f"Post ID: `{post['platform_post_id']}`")
+            st.markdown(f"<div style='font-size:13px;color:#1D1D1F;line-height:1.6'>{caption}</div>", unsafe_allow_html=True)
+            if hashtags:
+                st.markdown(f"<div style='font-size:12px;color:#0066CC;margin-top:6px'>{' '.join(f'#{h}' for h in hashtags)}</div>", unsafe_allow_html=True)
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 
