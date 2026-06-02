@@ -125,6 +125,67 @@ def test_no_thumbnail_skips_image_check(base_config):
     assert agent._client.messages.create.call_count == 1
 
 
+# --- _qc_with_retry ---------------------------------------------------------
+
+
+def test_qc_with_retry_passes_immediately(base_config):
+    from scheduler.cron import _qc_with_retry
+
+    qa = _agent(base_config)
+    qa._client.messages.create.return_value = _msg("OK")
+    post = _post(caption="Good caption.", thumbnail_url=None)
+    assert _qc_with_retry(post, qa, thumbnail_agent=None) is True
+
+
+def test_qc_with_retry_regenerates_on_image_failure(base_config):
+    from scheduler.cron import _qc_with_retry
+
+    qa = _agent(base_config)
+    # First review raises; second review (after regen) passes.
+    qa._client.messages.create.side_effect = [
+        _msg("OK"),  # text check pass (first review)
+        _msg('{"ok": false, "issue": "logo cut off"}'),  # image check fail
+        _msg("OK"),  # text check pass (second review)
+        _msg('{"ok": true}'),  # image check pass
+    ]
+
+    thumbnail_agent = MagicMock()
+    post = _post(caption="Caption.", thumbnail_url="https://test.supabase.co/img.jpg")
+    with patch.object(QualityAgent, "_fetch_image", return_value=("data", "image/jpeg")):
+        result = _qc_with_retry(post, qa, thumbnail_agent)
+
+    assert result is True
+    thumbnail_agent.generate.assert_called_once_with(post)
+
+
+def test_qc_with_retry_marks_failed_when_regen_also_fails(base_config):
+    from scheduler.cron import _qc_with_retry
+
+    qa = _agent(base_config)
+    qa._client.messages.create.side_effect = [
+        _msg("OK"),  # text pass
+        _msg('{"ok": false, "issue": "logo missing"}'),  # image fail (first)
+        _msg("OK"),  # text pass
+        _msg('{"ok": false, "issue": "still wrong"}'),  # image fail (second)
+    ]
+
+    thumbnail_agent = MagicMock()
+    post = _post(caption="Caption.", thumbnail_url="https://test.supabase.co/img.jpg")
+    with patch.object(QualityAgent, "_fetch_image", return_value=("data", "image/jpeg")):
+        result = _qc_with_retry(post, qa, thumbnail_agent)
+
+    assert result is False
+    assert post.error is not None
+    assert "QC" in post.error
+
+
+def test_qc_with_retry_none_agent_always_passes(base_config):
+    from scheduler.cron import _qc_with_retry
+
+    post = _post()
+    assert _qc_with_retry(post, quality_agent=None, thumbnail_agent=None) is True
+
+
 # --- Config -----------------------------------------------------------------
 
 

@@ -80,13 +80,9 @@ def run_content_pipeline() -> None:
             db.insert(post)
             content_agent.generate(post)
             _generate_media(post, thumbnail_agent, video_agent)
-            if quality_agent:
-                try:
-                    quality_agent.review(post)
-                except QualityError as exc:
-                    logger.warning("QC rejected post %s: %s", post.id, exc)
-                    db.update_status(post, PostStatus.FAILED, error=f"QC: {exc}")
-                    continue
+            if not _qc_with_retry(post, quality_agent, thumbnail_agent):
+                db.upsert(post)
+                continue
             scheduler_agent.schedule(post)
             db.upsert(post)
             created += 1
@@ -181,17 +177,12 @@ def _finalise_posts(posts: list[Post], db, scheduler_agent, *, persist_insert: b
     for post in posts:
         try:
             _generate_media(post, thumbnail_agent, video_agent)
-            if quality_agent:
-                try:
-                    quality_agent.review(post)
-                except QualityError as exc:
-                    logger.warning("QC rejected post %s: %s", post.id, exc)
-                    post.mark(PostStatus.FAILED, error=f"QC: {exc}")
-                    if persist_insert:
-                        db.insert(post)
-                    else:
-                        db.upsert(post)
-                    continue
+            if not _qc_with_retry(post, quality_agent, thumbnail_agent):
+                if persist_insert:
+                    db.insert(post)
+                else:
+                    db.upsert(post)
+                continue
             after = last_slot.get(post.platform)
             scheduler_agent.schedule(post, after=after)
             last_slot[post.platform] = post.scheduled_time
@@ -247,6 +238,48 @@ def _finalise_posts(posts: list[Post], db, scheduler_agent, *, persist_insert: b
             except Exception:
                 logger.exception("Could not persist failure for post %s", post.id)
     return scheduled
+
+
+def _qc_with_retry(post: Post, quality_agent, thumbnail_agent) -> bool:
+    """Run QC; regenerate the thumbnail once if the image check fails.
+
+    Text fixes are applied in-place silently. Image failures trigger one
+    regeneration attempt: if the new thumbnail passes, the post continues;
+    if it still fails, post.error is set and False is returned so the
+    caller can persist the failure and skip scheduling.
+    """
+    if quality_agent is None:
+        return True
+
+    first_error: QualityError | None = None
+    try:
+        quality_agent.review(post)
+        return True
+    except QualityError as exc:
+        first_error = exc
+        logger.warning("QC image check failed for post %s: %s", post.id, exc)
+
+    # One regeneration attempt — re-apply the brand overlay and re-check.
+    if thumbnail_agent is None:
+        post.mark(PostStatus.FAILED, error=f"QC: {first_error}")
+        return False
+
+    try:
+        thumbnail_agent.generate(post)
+        logger.info("Regenerated thumbnail for post %s; re-running QC", post.id)
+    except Exception:
+        logger.exception("Thumbnail regeneration failed for post %s", post.id)
+        post.mark(PostStatus.FAILED, error=f"QC: {first_error}")
+        return False
+
+    try:
+        quality_agent.review(post)
+        logger.info("Post %s passed QC after thumbnail regeneration", post.id)
+        return True
+    except QualityError as exc2:
+        logger.warning("Post %s still failed QC after regen: %s", post.id, exc2)
+        post.mark(PostStatus.FAILED, error=f"QC (after regen): {exc2}")
+        return False
 
 
 def _generate_media(post: Post, thumbnail_agent, video_agent) -> None:
@@ -397,6 +430,54 @@ def run_publisher() -> None:
                 logger.exception("Could not persist post %s after publish", post.id)
 
 
+def run_qc_retry() -> None:
+    """Regenerate thumbnails and re-run QC for posts that failed the image check.
+
+    Runs hourly. Finds posts whose error field starts with 'QC:', regenerates
+    the thumbnail, and reschedules any that pass the second check. Posts that
+    fail again are left as failed with an updated error message.
+    """
+    try:
+        from supabase import create_client
+
+        sb = create_client(config.supabase_url, config.supabase_key)
+        thumbnail_agent = _safe_init(ThumbnailAgent, "thumbnail")
+        quality_agent = _safe_init(QualityAgent, "quality")
+        scheduler_agent = SchedulerAgent()
+        db = get_database()
+    except Exception:
+        logger.exception("QC retry could not initialise; skipping run")
+        return
+
+    rows = (
+        sb.table("posts").select("*").eq("status", "failed").like("error", "QC:%").execute().data
+        or []
+    )
+
+    if not rows:
+        return
+
+    logger.info("QC retry: %d post(s) to recheck", len(rows))
+    retried = 0
+    for row in rows:
+        post = Post.from_row(row)
+        try:
+            if not _qc_with_retry(post, quality_agent, thumbnail_agent):
+                sb.table("posts").update(
+                    {"error": post.error, "thumbnail_url": post.thumbnail_url}
+                ).eq("id", post.id).execute()
+                continue
+
+            scheduler_agent.schedule(post)
+            db.upsert(post)
+            retried += 1
+            logger.info("QC retry: post %s rescheduled", post.id[:8])
+        except Exception:
+            logger.exception("QC retry failed for post %s", post.id)
+
+    logger.info("QC retry finished: %d post(s) rescheduled", retried)
+
+
 def _safe_init(agent_cls, label: str):
     """Instantiate an agent, returning None if it's unconfigured."""
     try:
@@ -450,6 +531,16 @@ def build_scheduler() -> BlockingScheduler:
         max_instances=1,
         coalesce=True,
         misfire_grace_time=300,
+    )
+
+    # Retry QC-failed posts every hour — regenerate thumbnail and recheck.
+    scheduler.add_job(
+        run_qc_retry,
+        trigger=IntervalTrigger(hours=1),
+        id="qc_retry",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=600,
     )
 
     # Refresh images nightly at 02:00 — after the Imagen quota resets.
