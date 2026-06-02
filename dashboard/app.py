@@ -8,6 +8,7 @@ from collections import defaultdict
 from datetime import UTC, datetime, date
 
 import streamlit as st
+import streamlit.components.v1 as components
 from dotenv import load_dotenv
 from supabase import create_client
 
@@ -647,11 +648,35 @@ with tab_calendar:
                 {count_html}
             </div>"""
 
-    st.markdown(f"""
-    <div style="background:#fff;border-radius:16px;padding:24px;border:1px solid #E8E8ED">
-        <div class="cal-grid">{header_html}{cells_html}</div>
-    </div>
-    """, unsafe_allow_html=True)
+    cal_html = f"""
+    <html><head>
+    <link href="https://fonts.googleapis.com/css2?family=Figtree:wght@300;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+    * {{ margin:0; padding:0; box-sizing:border-box; font-family:'Figtree',sans-serif; }}
+    body {{ background:#F5F5F7; padding:8px; }}
+    .cal-grid {{ display:grid; grid-template-columns:repeat(7,1fr); gap:4px; }}
+    .cal-header-cell {{ text-align:center; font-size:11px; font-weight:700; letter-spacing:0.08em; text-transform:uppercase; color:#A1A1A6; padding:8px 0; }}
+    .cal-day {{ background:#fff; border:1px solid #E8E8ED; border-radius:10px; min-height:76px; padding:8px; }}
+    .cal-day.empty {{ background:transparent; border-color:transparent; }}
+    .cal-day.today {{ border-color:#0066CC; border-width:2px; }}
+    .cal-day-num {{ font-size:13px; font-weight:700; color:#1D1D1F; margin-bottom:4px; }}
+    .cal-day.today .cal-day-num {{ color:#0066CC; }}
+    .cal-dot-row {{ display:flex; flex-wrap:wrap; gap:3px; margin-top:4px; }}
+    .cal-dot {{ width:8px; height:8px; border-radius:50%; flex-shrink:0; }}
+    .cal-dot.instagram {{ background:#E1306C; }}
+    .cal-dot.facebook {{ background:#1877F2; }}
+    .cal-dot.twitter {{ background:#1DA1F2; }}
+    .cal-dot.linkedin {{ background:#0A66C2; }}
+    .cal-dot.tiktok {{ background:#010101; }}
+    .cal-dot.youtube {{ background:#FF0000; }}
+    .cal-count {{ font-size:10px; font-weight:700; color:#0066CC; margin-top:3px; }}
+    </style></head>
+    <body>
+    <div class="cal-grid">{header_html}{cells_html}</div>
+    </body></html>
+    """
+    cal_rows = len(cal)
+    components.html(cal_html, height=cal_rows * 92 + 48, scrolling=False)
 
     # Day detail — click a date to see posts
     st.markdown("<div style='margin-top:24px;font-size:16px;font-weight:700;color:#1D1D1F'>View a Day</div>", unsafe_allow_html=True)
