@@ -134,10 +134,10 @@ now_utc = datetime.now(UTC)
 col_logo, col_hdr, col_btn = st.columns([2, 5, 1])
 with col_logo:
     st.markdown("""
-    <div style="background:#000000;border-radius:14px;padding:14px 20px 12px 20px;
-                display:inline-block;width:100%;box-sizing:border-box;margin-top:2px">
+    <div style="background:#000000;border-radius:14px;padding:16px 20px 14px 20px;
+                display:block;width:100%;box-sizing:border-box;margin-top:16px">
       <span style="font-size:28px;font-weight:800;letter-spacing:-0.045em;color:#ffffff;display:block;line-height:1.1">Brite</span>
-      <span style="font-size:8px;font-weight:300;letter-spacing:0.25em;color:rgba(255,255,255,0.4);text-transform:uppercase;display:block;margin-top:3px">Tech Lifestyle</span>
+      <span style="font-size:8px;font-weight:300;letter-spacing:0.25em;color:rgba(255,255,255,0.4);text-transform:uppercase;display:block;margin-top:4px">Tech Lifestyle</span>
     </div>""", unsafe_allow_html=True)
 with col_hdr:
     st.markdown(f"""
@@ -257,10 +257,19 @@ def _post_card(post: dict, time_str: str = "", time_label: str = "") -> None:
                     st.image(img if img.endswith(".png") else img + ".png", use_container_width=True)
                 st.divider()
     elif caption:
-        with st.expander("Caption"):
-            st.markdown(f"<div style='font-size:13px;color:#1D1D1F;line-height:1.6'>{caption}</div>", unsafe_allow_html=True)
-            if hashtags:
-                st.markdown(f"<div style='font-size:12px;color:#0066CC;margin-top:6px'>{' '.join(f'#{h}' for h in hashtags)}</div>", unsafe_allow_html=True)
+        tags_html = f"<div style='font-size:11px;color:#0066CC;margin-top:8px;line-height:1.8'>{' '.join(f'#{h}' for h in hashtags)}</div>" if hashtags else ""
+        st.markdown(f"""
+        <details style="margin-top:8px;border:1px solid #E8E8ED;border-radius:10px;overflow:hidden">
+          <summary style="padding:10px 14px;font-size:13px;font-weight:600;color:#1D1D1F;
+                          background:#F5F5F7;cursor:pointer;list-style:none;
+                          display:flex;align-items:center;justify-content:space-between">
+            Caption &nbsp;›
+          </summary>
+          <div style="padding:12px 14px;font-size:13px;color:#1D1D1F;line-height:1.7;background:#fff">
+            {caption}{tags_html}
+          </div>
+        </details>
+        """, unsafe_allow_html=True)
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 
