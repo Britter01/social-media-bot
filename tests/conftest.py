@@ -132,7 +132,8 @@ def base_config():
         heygen_voice_id="voice-123",
         heygen_avatar_id="avatar-123",
         supabase_url="https://test.supabase.co",
-        supabase_key="test-supabase-key",
+        # Supabase 2.15+ validates the key matches JWT dot-segment format.
+        supabase_key="test.test.test",
         supabase_bucket="media",
         instagram_access_token="ig-token",
         instagram_business_account_id="ig-account",

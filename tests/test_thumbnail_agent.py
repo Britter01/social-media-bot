@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -29,7 +29,9 @@ def test_generate_writes_local_file(base_config, tmp_path):
     agent._client.models.generate_images.return_value = _imagen_response()
 
     post = Post(pillar="Tech Lifestyle", platform="instagram", topic="desk setup")
-    agent.generate(post)
+    # Patch the overlay so PIL never tries to decode the fake bytes.
+    with patch("core.image_utils.add_brand_overlay", side_effect=lambda b, *a, **kw: b):
+        agent.generate(post)
 
     assert post.thumbnail_url == str(tmp_path / f"{post.id}.png")
     assert (tmp_path / f"{post.id}.png").read_bytes() == b"\x89PNG-fake"
@@ -45,7 +47,8 @@ def test_generate_uses_storage_when_available(base_config, tmp_path):
     agent._storage.upload.return_value = "https://cdn.example/thumb.png"
 
     post = Post(pillar="Review", platform="instagram")
-    agent.generate(post)
+    with patch("core.image_utils.add_brand_overlay", side_effect=lambda b, *a, **kw: b):
+        agent.generate(post)
 
     assert post.thumbnail_url == "https://cdn.example/thumb.png"
     agent._storage.upload.assert_called_once()
