@@ -125,65 +125,75 @@ def test_no_thumbnail_skips_image_check(base_config):
     assert agent._client.messages.create.call_count == 1
 
 
-# --- _qc_with_retry ---------------------------------------------------------
+# --- _generate_media (image QC integrated) ----------------------------------
 
 
-def test_qc_with_retry_passes_immediately(base_config):
-    from scheduler.cron import _qc_with_retry
-
-    qa = _agent(base_config)
-    qa._client.messages.create.return_value = _msg("OK")
-    post = _post(caption="Good caption.", thumbnail_url=None)
-    assert _qc_with_retry(post, qa, thumbnail_agent=None) is True
-
-
-def test_qc_with_retry_regenerates_on_image_failure(base_config):
-    from scheduler.cron import _qc_with_retry
+def test_generate_media_imagen_called_once_on_overlay_retry(base_config):
+    """Imagen is called exactly once even when the first overlay fails QC."""
+    from scheduler.cron import _generate_media
 
     qa = _agent(base_config)
-    # First review raises; second review (after regen) passes.
+    # First overlay check fails, second passes.
     qa._client.messages.create.side_effect = [
-        _msg("OK"),  # text check pass (first review)
-        _msg('{"ok": false, "issue": "logo cut off"}'),  # image check fail
-        _msg("OK"),  # text check pass (second review)
-        _msg('{"ok": true}'),  # image check pass
+        _msg('{"ok": false, "issue": "logo cut off"}'),
+        _msg('{"ok": true}'),
     ]
 
     thumbnail_agent = MagicMock()
-    post = _post(caption="Caption.", thumbnail_url="https://test.supabase.co/img.jpg")
-    with patch.object(QualityAgent, "_fetch_image", return_value=("data", "image/jpeg")):
-        result = _qc_with_retry(post, qa, thumbnail_agent)
+    thumbnail_agent.generate_raw.return_value = b"raw"
+    thumbnail_agent.apply_overlay.return_value = b"overlaid"
 
-    assert result is True
-    thumbnail_agent.generate.assert_called_once_with(post)
+    post = _post(caption="Caption.")
+    _generate_media(post, thumbnail_agent, video_agent=None, quality_agent=qa)
+
+    thumbnail_agent.generate_raw.assert_called_once()  # Imagen: once only
+    assert thumbnail_agent.apply_overlay.call_count == 2  # overlay retried (free)
+    thumbnail_agent.upload.assert_called_once()  # uploaded once at the end
 
 
-def test_qc_with_retry_marks_failed_when_regen_also_fails(base_config):
-    from scheduler.cron import _qc_with_retry
+def test_generate_media_raises_quality_error_after_two_overlay_failures(base_config):
+    """QualityError propagates when both overlay attempts fail."""
+    from scheduler.cron import _generate_media
 
     qa = _agent(base_config)
     qa._client.messages.create.side_effect = [
-        _msg("OK"),  # text pass
-        _msg('{"ok": false, "issue": "logo missing"}'),  # image fail (first)
-        _msg("OK"),  # text pass
-        _msg('{"ok": false, "issue": "still wrong"}'),  # image fail (second)
+        _msg('{"ok": false, "issue": "logo missing"}'),
+        _msg('{"ok": false, "issue": "still missing"}'),
     ]
 
     thumbnail_agent = MagicMock()
-    post = _post(caption="Caption.", thumbnail_url="https://test.supabase.co/img.jpg")
-    with patch.object(QualityAgent, "_fetch_image", return_value=("data", "image/jpeg")):
-        result = _qc_with_retry(post, qa, thumbnail_agent)
-
-    assert result is False
-    assert post.error is not None
-    assert "QC" in post.error
-
-
-def test_qc_with_retry_none_agent_always_passes(base_config):
-    from scheduler.cron import _qc_with_retry
+    thumbnail_agent.generate_raw.return_value = b"raw"
+    thumbnail_agent.apply_overlay.return_value = b"overlaid"
 
     post = _post()
-    assert _qc_with_retry(post, quality_agent=None, thumbnail_agent=None) is True
+    with pytest.raises(QualityError):
+        _generate_media(post, thumbnail_agent, video_agent=None, quality_agent=qa)
+
+    thumbnail_agent.generate_raw.assert_called_once()  # still only one Imagen call
+    thumbnail_agent.upload.assert_not_called()  # never uploaded a bad image
+
+
+def test_generate_media_no_quality_agent_uploads_directly(base_config):
+    """Without a quality agent the thumbnail is uploaded without QC."""
+    from scheduler.cron import _generate_media
+
+    thumbnail_agent = MagicMock()
+    thumbnail_agent.generate_raw.return_value = b"raw"
+    thumbnail_agent.apply_overlay.return_value = b"overlaid"
+
+    post = _post()
+    _generate_media(post, thumbnail_agent, video_agent=None, quality_agent=None)
+
+    thumbnail_agent.generate_raw.assert_called_once()
+    thumbnail_agent.upload.assert_called_once()
+
+
+def test_generate_media_no_thumbnail_agent_skips_imagen(base_config):
+    from scheduler.cron import _generate_media
+
+    post = _post()
+    _generate_media(post, thumbnail_agent=None, video_agent=None, quality_agent=None)
+    # Should not raise; nothing to assert beyond no crash
 
 
 # --- Config -----------------------------------------------------------------

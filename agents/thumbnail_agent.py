@@ -75,8 +75,12 @@ class ThumbnailAgent:
                     exc_info=True,
                 )
 
-    def generate(self, post: Post) -> Post:
-        """Generate a thumbnail and set ``post.thumbnail_url`` in place."""
+    def generate_raw(self, post: Post) -> bytes:
+        """Call Imagen and return the raw image bytes — no overlay, no upload.
+
+        This is the expensive step (one API credit). Callers can apply the
+        overlay separately and retry it without spending another credit.
+        """
         from google.genai import types
 
         prompt = _build_prompt(post, self._cfg.brand_name)
@@ -99,22 +103,35 @@ class ThumbnailAgent:
         if not images:
             raise RuntimeError("Imagen returned no images (possibly blocked by safety filters)")
 
-        image_bytes = images[0].image.image_bytes
+        return images[0].image.image_bytes
 
+    def apply_overlay(self, raw_bytes: bytes) -> bytes:
+        """Apply the brand overlay to raw image bytes and return the result.
+
+        Pure in-memory Pillow compositing — no network calls, no API credits.
+        Safe to call multiple times on the same raw_bytes.
+        """
         from core.image_utils import add_brand_overlay
 
-        image_bytes = add_brand_overlay(
-            image_bytes,
-            self._cfg.brand_name,
-            self._cfg.brand_tagline,
-        )
+        return add_brand_overlay(raw_bytes, self._cfg.brand_name, self._cfg.brand_tagline)
 
+    def upload(self, post: Post, image_bytes: bytes) -> None:
+        """Persist final image bytes and set ``post.thumbnail_url``."""
         url = self._persist(post, image_bytes)
         post.thumbnail_url = url
-        # Don't downgrade status if media (video) handling sets it later;
-        # MEDIA_READY signals at least one media asset exists.
         post.mark(PostStatus.MEDIA_READY)
-        logger.info("Generated thumbnail for post %s -> %s", post.id, url)
+        logger.info("Uploaded thumbnail for post %s -> %s", post.id, url)
+
+    def generate(self, post: Post) -> Post:
+        """Generate a thumbnail and set ``post.thumbnail_url`` in place.
+
+        Convenience wrapper: generate_raw → apply_overlay → upload.
+        Use generate_raw + apply_overlay + upload separately when you want
+        to QC the overlay in memory before spending an upload.
+        """
+        raw_bytes = self.generate_raw(post)
+        final_bytes = self.apply_overlay(raw_bytes)
+        self.upload(post, final_bytes)
         return post
 
     def _persist(self, post: Post, image_bytes: bytes) -> str:

@@ -79,9 +79,13 @@ def run_content_pipeline() -> None:
         try:
             db.insert(post)
             content_agent.generate(post)
-            _generate_media(post, thumbnail_agent, video_agent)
-            if not _qc_with_retry(post, quality_agent, thumbnail_agent):
-                db.upsert(post)
+            if quality_agent:
+                quality_agent.fix_text(post)
+            try:
+                _generate_media(post, thumbnail_agent, video_agent, quality_agent)
+            except QualityError as exc:
+                logger.warning("QC rejected post %s: %s", post.id, exc)
+                db.update_status(post, PostStatus.FAILED, error=f"QC: {exc}")
                 continue
             scheduler_agent.schedule(post)
             db.upsert(post)
@@ -176,8 +180,13 @@ def _finalise_posts(posts: list[Post], db, scheduler_agent, *, persist_insert: b
     scheduled = 0
     for post in posts:
         try:
-            _generate_media(post, thumbnail_agent, video_agent)
-            if not _qc_with_retry(post, quality_agent, thumbnail_agent):
+            if quality_agent:
+                quality_agent.fix_text(post)
+            try:
+                _generate_media(post, thumbnail_agent, video_agent, quality_agent)
+            except QualityError as exc:
+                logger.warning("QC rejected post %s: %s", post.id, exc)
+                post.mark(PostStatus.FAILED, error=f"QC: {exc}")
                 if persist_insert:
                     db.insert(post)
                 else:
@@ -240,57 +249,46 @@ def _finalise_posts(posts: list[Post], db, scheduler_agent, *, persist_insert: b
     return scheduled
 
 
-def _qc_with_retry(post: Post, quality_agent, thumbnail_agent) -> bool:
-    """Run QC; regenerate the thumbnail once if the image check fails.
+def _generate_media(post: Post, thumbnail_agent, video_agent, quality_agent=None) -> None:
+    """Generate media assets for *post*.
 
-    Text fixes are applied in-place silently. Image failures trigger one
-    regeneration attempt: if the new thumbnail passes, the post continues;
-    if it still fails, post.error is set and False is returned so the
-    caller can persist the failure and skip scheduling.
+    Thumbnail: Imagen is called once. If a quality_agent is provided the
+    overlay is QC-checked in memory before uploading — re-applying the
+    overlay (free Pillow) once if it fails — so no Imagen credit is ever
+    wasted on a branding problem.  Raises QualityError if both overlay
+    attempts fail; the caller should mark the post failed.
+
+    Video: best-effort, never raises.
     """
-    if quality_agent is None:
-        return True
-
-    first_error: QualityError | None = None
-    try:
-        quality_agent.review(post)
-        return True
-    except QualityError as exc:
-        first_error = exc
-        logger.warning("QC image check failed for post %s: %s", post.id, exc)
-
-    # One regeneration attempt — re-apply the brand overlay and re-check.
-    if thumbnail_agent is None:
-        post.mark(PostStatus.FAILED, error=f"QC: {first_error}")
-        return False
-
-    try:
-        thumbnail_agent.generate(post)
-        logger.info("Regenerated thumbnail for post %s; re-running QC", post.id)
-    except Exception:
-        logger.exception("Thumbnail regeneration failed for post %s", post.id)
-        post.mark(PostStatus.FAILED, error=f"QC: {first_error}")
-        return False
-
-    try:
-        quality_agent.review(post)
-        logger.info("Post %s passed QC after thumbnail regeneration", post.id)
-        return True
-    except QualityError as exc2:
-        logger.warning("Post %s still failed QC after regen: %s", post.id, exc2)
-        post.mark(PostStatus.FAILED, error=f"QC (after regen): {exc2}")
-        return False
-
-
-def _generate_media(post: Post, thumbnail_agent, video_agent) -> None:
-    """Best-effort media generation; never fatal to the pipeline."""
     needs_video = post.platform in _VIDEO_PLATFORMS
 
     if thumbnail_agent is not None:
         try:
-            thumbnail_agent.generate(post)
+            raw_bytes = thumbnail_agent.generate_raw(post)
         except Exception:
-            logger.exception("Thumbnail generation failed for post %s", post.id)
+            logger.exception("Imagen generation failed for post %s", post.id)
+            raw_bytes = None
+
+        if raw_bytes is not None:
+            final_bytes = thumbnail_agent.apply_overlay(raw_bytes)
+
+            if quality_agent is not None:
+                try:
+                    quality_agent.check_image_bytes(post, final_bytes)
+                except QualityError as exc:
+                    logger.warning(
+                        "QC: overlay failed for post %s: %s — re-applying (no new Imagen call)",
+                        post.id,
+                        exc,
+                    )
+                    final_bytes = thumbnail_agent.apply_overlay(raw_bytes)
+                    # Raises QualityError if still wrong — caller handles it.
+                    quality_agent.check_image_bytes(post, final_bytes)
+
+            try:
+                thumbnail_agent.upload(post, final_bytes)
+            except Exception:
+                logger.exception("Thumbnail upload failed for post %s", post.id)
 
     if needs_video and video_agent is not None:
         try:
@@ -462,10 +460,16 @@ def run_qc_retry() -> None:
     for row in rows:
         post = Post.from_row(row)
         try:
-            if not _qc_with_retry(post, quality_agent, thumbnail_agent):
-                sb.table("posts").update(
-                    {"error": post.error, "thumbnail_url": post.thumbnail_url}
-                ).eq("id", post.id).execute()
+            # Regenerate using the cost-effective flow: Imagen once, overlay
+            # QC'd in memory, upload only after passing.
+            try:
+                _generate_media(
+                    post, thumbnail_agent, video_agent=None, quality_agent=quality_agent
+                )
+            except QualityError as exc:
+                logger.warning("QC retry: post %s still failing after regen: %s", post.id[:8], exc)
+                post.mark(PostStatus.FAILED, error=f"QC (retry): {exc}")
+                sb.table("posts").update({"error": post.error}).eq("id", post.id).execute()
                 continue
 
             scheduler_agent.schedule(post)

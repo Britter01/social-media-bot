@@ -70,6 +70,24 @@ class QualityAgent:
         if post.thumbnail_url:
             self._check_image(post, post.thumbnail_url, label="thumbnail")
 
+    def fix_text(self, post: Post) -> None:
+        """Run text QC only; fix caption in-place if needed. Never raises."""
+        if post.caption:
+            try:
+                self._check_text(post)
+            except Exception:
+                logger.exception("Text QC failed for post %s; caption unchanged", post.id)
+
+    def check_image_bytes(self, post: Post, image_bytes: bytes, label: str = "thumbnail") -> None:
+        """QC the brand overlay directly from bytes — no HTTP fetch, no upload needed.
+
+        Raises QualityError if the overlay looks wrong.  Call this while the
+        image is still in memory (before uploading) to avoid wasting a
+        Supabase upload on an image that will be rejected.
+        """
+        image_data = base64.standard_b64encode(image_bytes).decode()
+        self._check_image_data(post, image_data, media_type="image/png", label=label)
+
     # --- Text ---------------------------------------------------------------
 
     def _check_text(self, post: Post) -> None:
@@ -89,12 +107,7 @@ class QualityAgent:
     # --- Image --------------------------------------------------------------
 
     def _check_image(self, post: Post, url: str, label: str = "image") -> None:
-        """Ask Claude vision whether the brand overlay looks correct.
-
-        Network errors skip the check rather than blocking the post; a bad
-        API response (non-JSON) is also treated as a skip so a transient
-        issue never stops an entire pipeline run.
-        """
+        """Ask Claude vision whether the brand overlay looks correct (URL path)."""
         image_data, media_type = self._fetch_image(url)
         if image_data is None:
             logger.warning(
@@ -103,7 +116,16 @@ class QualityAgent:
                 post.id,
             )
             return
+        self._check_image_data(post, image_data, media_type=media_type, label=label)
 
+    def _check_image_data(
+        self,
+        post: Post,
+        image_data: str,
+        media_type: str = "image/png",
+        label: str = "image",
+    ) -> None:
+        """Core vision check — shared by URL and bytes paths."""
         resp = self._client.messages.create(
             model=self._cfg.model_fast,
             max_tokens=128,
