@@ -1,18 +1,15 @@
 """Image post-processing — brand overlay compositing via Pillow.
 
-Applies the Brite Tech Lifestyle wordmark directly onto Imagen-generated
-photos. No background bar — just the brand text floating over the image
-with a subtle drop shadow for legibility on any background.
+Composites a pre-made transparent-background PNG logo onto Imagen-generated
+photos.  No text rendering, no font downloads.
 
-Overlay design (matches brand-kit typography spec):
-  • "Brite" — Figtree Bold 700, white, tight tracking (−4%)
-  • "TECH LIFESTYLE" — Figtree Regular, UPPERCASE, wide tracking (+22%),
-    white at 55% opacity
-  • Soft dark drop shadow on both lines for contrast on bright backgrounds
-  • Positioned bottom-centre with comfortable padding
+Two logo variants are available:
+  • final_logo_transparent_allwhite.png — white text; use on dark/photo backgrounds
+  • final_logo_transparent_allblack.png — black text; use on light/white backgrounds
 
-Fonts are downloaded from the jsDelivr/Fontsource CDN on first use and cached
-in the system temp directory so Railway containers pick them up automatically.
+The logo PNG is 1024×1024 with the actual wordmark centred inside it.
+The content bounding box (from alpha inspection) is (264, 386, 758, 623), so
+the logo is cropped to that region before scaling to keep sizing predictable.
 """
 
 from __future__ import annotations
@@ -20,110 +17,22 @@ from __future__ import annotations
 import io
 import logging
 import os
-import tempfile
 
 logger = logging.getLogger(__name__)
 
-# --------------------------------------------------------------------------- #
-# Brand tokens (from brand-kit CSS variables)                                 #
-# --------------------------------------------------------------------------- #
-_WHITE = (255, 255, 255)
-_SHADOW = (0, 0, 0)
+# Resolve logo paths relative to this file's package root
+_ASSETS_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "assets", "logos"))
+_LOGO_WHITE = os.path.join(_ASSETS_DIR, "final_logo_transparent_allwhite.png")
+_LOGO_BLACK = os.path.join(_ASSETS_DIR, "final_logo_transparent_allblack.png")
 
-# Wordmark opacities
-_BRITE_ALPHA = 230  # "Brite" — near-full white, slightly soft
-_SUB_ALPHA = 140  # "TECH LIFESTYLE" — white at ~55% opacity
+# Layout constants
+_LOGO_WIDTH_RATIO = 0.32  # logo width as a fraction of the photo width
+_LOGO_MIN_WIDTH = 120  # pixels
+_LOGO_MAX_WIDTH = 380  # pixels
+_PAD_BOTTOM = 28  # pixels from the bottom edge of the photo
 
-# Shadow
-_SHADOW_ALPHA = 120  # shadow darkness
-_SHADOW_OFFSET = 1  # pixels offset for drop shadow
-
-# Bottom padding from image edge
-_PAD_BOTTOM = 28
-
-# Font sizes
-_SIZE_BRITE = 36
-_SIZE_SUB = 11
-
-# Letter-spacing simulation (extra pixels between characters)
-_TRACKING_BRITE = -1  # slight tightening
-_TRACKING_SUB = 3  # wide tracking for subtitle
-
-# --------------------------------------------------------------------------- #
-# Font loading                                                                 #
-# --------------------------------------------------------------------------- #
-_FONT_CACHE_DIR = os.path.join(tempfile.gettempdir(), "btl_fonts")
-_FONT_URLS = {
-    "figtree-bold": "https://cdn.jsdelivr.net/fontsource/fonts/figtree@latest/latin-700-normal.ttf",
-    "figtree-regular": "https://cdn.jsdelivr.net/fontsource/fonts/figtree@latest/latin-400-normal.ttf",
-}
-
-
-def _get_font(name: str, size: int):
-    """Load a TrueType font, downloading and caching it on first use."""
-    from PIL import ImageFont
-
-    os.makedirs(_FONT_CACHE_DIR, exist_ok=True)
-    path = os.path.join(_FONT_CACHE_DIR, f"{name}.ttf")
-
-    if not os.path.exists(path):
-        url = _FONT_URLS.get(name)
-        if url:
-            try:
-                import requests
-
-                resp = requests.get(url, timeout=15)
-                resp.raise_for_status()
-                with open(path, "wb") as fh:
-                    fh.write(resp.content)
-                logger.info("Downloaded font %s -> %s", name, path)
-            except Exception:
-                logger.warning("Could not download font %s; using default", name, exc_info=True)
-                path = None
-
-    if path and os.path.exists(path):
-        try:
-            return ImageFont.truetype(path, size)
-        except Exception:
-            pass
-
-    # Fallback — Pillow built-in bitmap font (Pillow 10.1+ supports size param)
-    try:
-        return ImageFont.load_default(size=size)
-    except TypeError:
-        return ImageFont.load_default()
-
-
-def _text_width(font, text: str, tracking: int = 0) -> int:
-    """Measure the rendered width of ``text`` including extra tracking."""
-    try:
-        bbox = font.getbbox(text)
-        base_w = bbox[2] - bbox[0]
-    except Exception:
-        base_w = len(text) * (font.size if hasattr(font, "size") else 10)
-    return base_w + tracking * max(0, len(text) - 1)
-
-
-def _draw_tracked(draw, xy: tuple, text: str, font, fill: tuple, tracking: int = 0) -> None:
-    """Draw text with per-character letter-spacing (tracking).
-
-    Pillow doesn't support CSS letter-spacing natively, so we place each
-    character individually with the extra gap applied between them.
-    """
-    x, y = xy
-    for char in text:
-        draw.text((x, y), char, font=font, fill=fill)
-        try:
-            bbox = font.getbbox(char)
-            char_w = bbox[2] - bbox[0]
-        except Exception:
-            char_w = font.size if hasattr(font, "size") else 10
-        x += char_w + tracking
-
-
-# --------------------------------------------------------------------------- #
-# Public API                                                                   #
-# --------------------------------------------------------------------------- #
+# Pre-computed content bbox inside the 1024×1024 logo canvas (alpha getbbox result)
+_LOGO_CONTENT_BOX = (264, 386, 758, 623)
 
 
 def add_brand_overlay(
@@ -131,66 +40,51 @@ def add_brand_overlay(
     brand_name: str = "Brite Tech Lifestyle",
     tagline: str = "",
     bar_opacity: int = 255,
+    dark_logo: bool = False,
 ) -> bytes:
-    """Composite the Brite Tech Lifestyle wordmark onto an image.
+    """Composite the brand logo PNG onto *image_bytes*.
 
-    Text floats directly on the photo — no background bar.
-    A soft drop shadow ensures legibility on bright or busy backgrounds.
+    Scales the logo to fit the image width and places it at the bottom-centre.
+    Pass ``dark_logo=True`` when overlaying on a light/white background.
 
-    Returns PNG bytes with the wordmark applied.
+    Returns PNG bytes with the logo applied.  If Pillow is unavailable or the
+    logo file is missing, the original bytes are returned unchanged.
     """
     try:
-        from PIL import Image, ImageDraw
+        from PIL import Image
     except ImportError:
         logger.warning("Pillow not installed; skipping brand overlay")
+        return image_bytes
+
+    logo_path = _LOGO_BLACK if dark_logo else _LOGO_WHITE
+    if not os.path.exists(logo_path):
+        logger.warning("Brand logo not found at %s; skipping overlay", logo_path)
+        return image_bytes
+
+    try:
+        logo_full = Image.open(logo_path).convert("RGBA")
+    except Exception:
+        logger.warning("Could not load brand logo; skipping overlay", exc_info=True)
         return image_bytes
 
     img = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
     width, height = img.size
 
-    font_brite = _get_font("figtree-bold", _SIZE_BRITE)
-    font_sub = _get_font("figtree-regular", _SIZE_SUB)
+    # Crop to just the visible wordmark — removes blank transparent margins
+    logo_cropped = logo_full.crop(_LOGO_CONTENT_BOX)
 
+    # Scale proportionally to a sensible width for this image
+    target_w = int(max(_LOGO_MIN_WIDTH, min(_LOGO_MAX_WIDTH, width * _LOGO_WIDTH_RATIO)))
+    target_h = int(logo_cropped.height * target_w / logo_cropped.width)
+    logo_scaled = logo_cropped.resize((target_w, target_h), Image.LANCZOS)
+
+    # Bottom-centre position with padding
+    paste_x = (width - target_w) // 2
+    paste_y = height - target_h - _PAD_BOTTOM
+
+    # Composite logo onto a blank RGBA layer then merge with photo
     overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(overlay)
-
-    # ── "TECH LIFESTYLE" — small, wide-tracked, positioned first ────────────
-    sub_text = "TECH LIFESTYLE"
-    sub_w = _text_width(font_sub, sub_text, _TRACKING_SUB)
-    sub_x = (width - sub_w) // 2
-    sub_y = height - _PAD_BOTTOM - _SIZE_SUB
-
-    # Shadow
-    _draw_tracked(
-        draw,
-        (sub_x + _SHADOW_OFFSET, sub_y + _SHADOW_OFFSET),
-        sub_text,
-        font_sub,
-        (*_SHADOW, _SHADOW_ALPHA),
-        _TRACKING_SUB,
-    )
-    # Text
-    _draw_tracked(draw, (sub_x, sub_y), sub_text, font_sub, (*_WHITE, _SUB_ALPHA), _TRACKING_SUB)
-
-    # ── "Brite" — bold, above subtitle ──────────────────────────────────────
-    brite_w = _text_width(font_brite, "Brite", _TRACKING_BRITE)
-    brite_x = (width - brite_w) // 2
-    brite_y = sub_y - _SIZE_BRITE - 4
-
-    # Shadow
-    _draw_tracked(
-        draw,
-        (brite_x + _SHADOW_OFFSET, brite_y + _SHADOW_OFFSET),
-        "Brite",
-        font_brite,
-        (*_SHADOW, _SHADOW_ALPHA),
-        _TRACKING_BRITE,
-    )
-    # Text
-    _draw_tracked(
-        draw, (brite_x, brite_y), "Brite", font_brite, (*_WHITE, _BRITE_ALPHA), _TRACKING_BRITE
-    )
-
+    overlay.paste(logo_scaled, (paste_x, paste_y), logo_scaled)
     img = Image.alpha_composite(img, overlay)
 
     out = io.BytesIO()
