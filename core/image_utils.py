@@ -10,6 +10,8 @@ Two logo variants are available:
 The logo PNG is 1024×1024 with the actual wordmark centred inside it.
 The content bounding box (from alpha inspection) is (264, 386, 758, 623), so
 the logo is cropped to that region before scaling to keep sizing predictable.
+
+Logo is placed small and subtle in the top-right corner.
 """
 
 from __future__ import annotations
@@ -25,11 +27,12 @@ _ASSETS_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "as
 _LOGO_WHITE = os.path.join(_ASSETS_DIR, "final_logo_transparent_allwhite.png")
 _LOGO_BLACK = os.path.join(_ASSETS_DIR, "final_logo_transparent_allblack.png")
 
-# Layout constants
-_LOGO_WIDTH_RATIO = 0.32  # logo width as a fraction of the photo width
-_LOGO_MIN_WIDTH = 120  # pixels
-_LOGO_MAX_WIDTH = 380  # pixels
-_PAD_BOTTOM = 28  # pixels from the bottom edge of the photo
+# Layout constants — small, top-right corner
+_LOGO_WIDTH_RATIO = 0.15  # logo width as a fraction of the photo width
+_LOGO_MIN_WIDTH = 80  # pixels
+_LOGO_MAX_WIDTH = 160  # pixels
+_PAD_TOP = 18  # pixels from top edge
+_PAD_RIGHT = 18  # pixels from right edge
 
 # Pre-computed content bbox inside the 1024×1024 logo canvas (alpha getbbox result)
 _LOGO_CONTENT_BOX = (264, 386, 758, 623)
@@ -44,8 +47,8 @@ def add_brand_overlay(
 ) -> bytes:
     """Composite the brand logo PNG onto *image_bytes*.
 
-    Scales the logo to fit the image width and places it at the bottom-centre.
-    Pass ``dark_logo=True`` when overlaying on a light/white background.
+    Scales the logo to ~15% of the image width and places it in the top-right
+    corner.  Pass ``dark_logo=True`` when overlaying on a light/white background.
 
     Returns PNG bytes with the logo applied.  If Pillow is unavailable or the
     logo file is missing, the original bytes are returned unchanged.
@@ -78,9 +81,9 @@ def add_brand_overlay(
     target_h = int(logo_cropped.height * target_w / logo_cropped.width)
     logo_scaled = logo_cropped.resize((target_w, target_h), Image.LANCZOS)
 
-    # Bottom-centre position with padding
-    paste_x = (width - target_w) // 2
-    paste_y = height - target_h - _PAD_BOTTOM
+    # Top-right corner with padding
+    paste_x = width - target_w - _PAD_RIGHT
+    paste_y = _PAD_TOP
 
     # Composite logo onto a blank RGBA layer then merge with photo
     overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))

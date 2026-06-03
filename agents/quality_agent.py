@@ -44,12 +44,18 @@ class QualityAgent:
     )
 
     _IMAGE_SYSTEM = (
-        "You are a brand quality-control reviewer. "
-        "Examine the social media image and check whether a brand logo or "
-        "text overlay is visible and legible. "
-        'Reply with JSON only: {"ok": true} if the overlay looks fine, or '
-        '{"ok": false, "issue": "<one sentence describing the problem>"} '
-        "if the logo is cut off, unreadable, missing, or badly positioned."
+        "You are a brand quality-control reviewer for social media images. "
+        "Check the image against these exact brand standards:\n"
+        "  1. A small logo watermark must be visible in the TOP-RIGHT corner of the image.\n"
+        "  2. The logo must be subtle — roughly 10–20% of the image width, not dominant.\n"
+        "  3. The logo must be legible and not cut off at the edge.\n"
+        "  4. There must be NO large text overlay, brand name, or watermark anywhere else "
+        "in the image (centre, bottom, or elsewhere).\n"
+        "  5. Any text that appears to be hallucinated INTO the photo itself (not the logo) "
+        "is a failure — e.g. words on walls, screens showing brand names, floating text.\n"
+        'Reply with JSON only: {"ok": true} if all standards are met, or '
+        '{"ok": false, "issue": "<one sentence describing exactly which standard failed>"} '
+        "if any standard is violated."
     )
 
     def __init__(self, cfg: Config = config) -> None:
