@@ -355,13 +355,14 @@ def run_image_refresh() -> None:
                 except Exception:
                     logger.exception("Failed refreshing carousel %s", c.get("id", "?")[:8])
 
-        # Standard post thumbnails
+        # Standard post thumbnails — only posts that are missing one
         if thumbnail_agent:
             std_posts = (
                 sb.table("posts")
                 .select("*")
                 .eq("post_type", "standard")
                 .eq("status", "scheduled")
+                .is_("thumbnail_url", "null")
                 .execute()
                 .data
                 or []

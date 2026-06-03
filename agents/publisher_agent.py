@@ -121,9 +121,10 @@ class PublisherAgent:
 
         try:
             post_id = handler(post)
-        except (httpx.HTTPError, PublishError):
+        except (httpx.HTTPError, PublishError) as exc:
+            detail = str(exc)[:200]
             logger.exception("Publish failed for post %s on %s", post.id, post.platform)
-            post.mark(PostStatus.FAILED, error=f"publish failed on {post.platform}")
+            post.mark(PostStatus.FAILED, error=f"publish failed on {post.platform}: {detail}")
             raise
 
         post.platform_post_id = post_id
