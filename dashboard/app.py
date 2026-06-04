@@ -42,6 +42,11 @@ const css = `
   .stButton > button { font-family: 'Figtree', sans-serif !important; font-weight: 600 !important; border-radius: 9999px !important; }
   .stButton > button[kind="primary"] { background: #0066CC !important; border-color: #0066CC !important; color: #fff !important; }
   [data-testid="stVerticalBlockBorderWrapper"] { border-radius: 16px !important; border-color: #E8E8ED !important; background: #fff; }
+  [data-testid="stExpander"] { border: 1px solid #E8E8ED !important; border-radius: 12px !important; overflow: hidden !important; background: #fff !important; margin-bottom: 8px !important; }
+  [data-testid="stExpander"] summary { padding: 10px 14px !important; font-size: 13px !important; font-weight: 600 !important; color: #1D1D1F !important; background: #F5F5F7 !important; cursor: pointer !important; list-style: none !important; display: flex !important; align-items: center !important; gap: 8px !important; }
+  [data-testid="stExpander"] summary::-webkit-details-marker { display: none !important; }
+  [data-testid="stExpander"] summary svg { color: #6E6E73 !important; }
+  [data-testid="stExpander"] > div:last-child { padding: 12px 14px !important; background: #fff !important; }
 `;
 const style = document.createElement('style');
 style.textContent = css;
