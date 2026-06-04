@@ -678,7 +678,7 @@ with tab_published:
 if failed:
     st.divider()
     with st.expander(f"⚠️  {len(failed)} Failed Post(s) — click to review"):
-        col_retry_all, _ = st.columns([1, 4])
+        col_retry_all, col_delete_all, _ = st.columns([1, 1, 3])
         with col_retry_all:
             if st.button("↩ Retry all", key="retry_all_failed", type="primary"):
                 ids = [p["id"] for p in failed if p.get("id")]
@@ -690,19 +690,30 @@ if failed:
                         f"Reset {len(ids)} post(s) to scheduled — they'll publish at their next due time."
                     )
                     st.rerun()
+        with col_delete_all:
+            if st.button("🗑 Delete all", key="delete_all_failed"):
+                ids = [p["id"] for p in failed if p.get("id")]
+                if ids:
+                    db.table("posts").delete().in_("id", ids).execute()
+                    st.success(f"Deleted {len(ids)} failed post(s).")
+                    st.rerun()
 
         for post in failed:
             title = post.get("title") or post.get("topic", "Untitled")
             platform = post.get("platform", "—")
             detail = post.get("error") or "No detail"
             post_id = post.get("id", "")
-            col_err, col_btn = st.columns([5, 1])
+            col_err, col_retry, col_del = st.columns([5, 1, 1])
             with col_err:
                 st.error(f"**{title}** ({platform})  \n{detail}")
-            with col_btn:
+            with col_retry:
                 if post_id and st.button("↩ Retry", key=f"retry_{post_id}"):
                     db.table("posts").update({"status": "scheduled", "error": None}).eq(
                         "id", post_id
                     ).execute()
                     st.success("Reset to scheduled.")
+                    st.rerun()
+            with col_del:
+                if post_id and st.button("🗑 Delete", key=f"delete_{post_id}"):
+                    db.table("posts").delete().eq("id", post_id).execute()
                     st.rerun()
