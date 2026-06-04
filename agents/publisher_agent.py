@@ -370,29 +370,30 @@ class PublisherAgent:
         self._cfg.require("linkedin_access_token", "linkedin_author_urn")
         headers = {
             "Authorization": f"Bearer {self._cfg.linkedin_access_token}",
+            "LinkedIn-Version": "202401",
             "X-Restli-Protocol-Version": "2.0.0",
             "Content-Type": "application/json",
         }
-        payload = {
+        payload: dict = {
             "author": self._cfg.linkedin_author_urn,
-            "lifecycleState": "PUBLISHED",
-            "specificContent": {
-                "com.linkedin.ugc.ShareContent": {
-                    "shareCommentary": {"text": post.caption_with_hashtags},
-                    "shareMediaCategory": "NONE",
-                }
+            "commentary": post.caption_with_hashtags,
+            "visibility": "PUBLIC",
+            "distribution": {
+                "feedDistribution": "MAIN_FEED",
+                "targetEntities": [],
+                "thirdPartyDistributionChannels": [],
             },
-            "visibility": {"com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC"},
+            "lifecycleState": "PUBLISHED",
+            "isReshareDisabledByAuthor": False,
         }
         with httpx.Client(timeout=60.0) as client:
             resp = client.post(
-                "https://api.linkedin.com/v2/ugcPosts",
+                "https://api.linkedin.com/rest/posts",
                 headers=headers,
                 json=payload,
             )
             resp.raise_for_status()
-            # LinkedIn returns the URN in the X-RestLi-Id header (or body id).
-            return resp.headers.get("x-restli-id") or resp.json().get("id", "")
+            return resp.headers.get("x-restli-id") or ""
 
     # --- YouTube (Data API v3) ------------------------------------------
 
