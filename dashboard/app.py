@@ -50,27 +50,21 @@ window.parent.document.head.appendChild(style);
 // Apply expander styles directly as inline styles (bypasses Streamlit's emotion CSS)
 function styleExpanders() {
   const doc = window.parent.document;
-  doc.querySelectorAll('[data-testid="stExpander"]').forEach(function(exp) {
-    const details = exp.querySelector('details');
-    if (details && !details.dataset.btlStyled) {
-      details.dataset.btlStyled = '1';
-      details.style.border = '1px solid #E8E8ED';
-      details.style.borderRadius = '12px';
-      details.style.overflow = 'hidden';
-      details.style.background = '#fff';
-      details.style.marginBottom = '8px';
-    }
-    const summary = exp.querySelector('summary');
-    if (summary && !summary.dataset.btlStyled) {
-      summary.dataset.btlStyled = '1';
-      summary.style.padding = '10px 14px';
-      summary.style.fontSize = '13px';
-      summary.style.fontWeight = '600';
-      summary.style.color = '#1D1D1F';
-      summary.style.background = '#F5F5F7';
-      summary.style.cursor = 'pointer';
-      summary.style.listStyle = 'none';
-    }
+  doc.querySelectorAll('[data-testid="stExpander"] details').forEach(function(details) {
+    details.style.setProperty('border', '1px solid #E8E8ED', 'important');
+    details.style.setProperty('border-radius', '12px', 'important');
+    details.style.setProperty('overflow', 'hidden', 'important');
+    details.style.setProperty('background', '#ffffff', 'important');
+    details.style.setProperty('margin-bottom', '8px', 'important');
+  });
+  doc.querySelectorAll('[data-testid="stExpander"] summary').forEach(function(summary) {
+    summary.style.setProperty('padding', '10px 14px', 'important');
+    summary.style.setProperty('background', '#F5F5F7', 'important');
+    summary.style.setProperty('background-color', '#F5F5F7', 'important');
+    summary.style.setProperty('font-size', '13px', 'important');
+    summary.style.setProperty('font-weight', '600', 'important');
+    summary.style.setProperty('color', '#1D1D1F', 'important');
+    summary.style.setProperty('cursor', 'pointer', 'important');
   });
 }
 
@@ -281,7 +275,7 @@ PLATFORM_COLORS = {
     "facebook": "#1565C0",    # deep blue
     "twitter": "#00897B",     # teal
     "linkedin": "#E65100",    # burnt orange
-    "tiktok": "#2E7D32",      # dark green
+    "tiktok": "#43A047",      # medium green (bright enough to read at small sizes)
     "youtube": "#B71C1C",     # dark red
 }
 
