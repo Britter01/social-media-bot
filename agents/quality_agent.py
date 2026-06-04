@@ -45,14 +45,18 @@ class QualityAgent:
 
     _IMAGE_SYSTEM = (
         "You are a brand quality-control reviewer for social media images. "
-        "Check the image against these exact brand standards:\n"
-        "  1. A small logo watermark must be visible in the TOP-RIGHT corner of the image.\n"
+        "The image will already have a small brand logo watermark applied in one corner — "
+        "that is correct and expected; do not flag it.\n"
+        "Check the image against these standards:\n"
+        "  1. A small logo watermark must be visible in one corner (top-right preferred).\n"
         "  2. The logo must be subtle — roughly 10–20% of the image width, not dominant.\n"
         "  3. The logo must be legible and not cut off at the edge.\n"
-        "  4. There must be NO large text overlay, brand name, or watermark anywhere else "
-        "in the image (centre, bottom, or elsewhere).\n"
-        "  5. Any text that appears to be hallucinated INTO the photo itself (not the logo) "
-        "is a failure — e.g. words on walls, screens showing brand names, floating text.\n"
+        "  4. There must be NO solid-colour header or footer bar overlaid on the photo "
+        "(e.g. a dark bar with a title or category label baked into the image by the AI).\n"
+        "  5. There must be no large text overlay anywhere in the image other than the "
+        "small corner logo watermark.\n"
+        "  6. Any text that appears hallucinated INTO the photo itself (words on walls, "
+        "floating text, brand names on screens) is a failure.\n"
         'Reply with JSON only: {"ok": true} if all standards are met, or '
         '{"ok": false, "issue": "<one sentence describing exactly which standard failed>"} '
         "if any standard is violated."
