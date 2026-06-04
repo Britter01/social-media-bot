@@ -141,7 +141,7 @@ class PublisherAgent:
         client: httpx.Client, container_id: str, token: str, label: str = "container"
     ) -> None:
         """Poll until the Instagram media container is FINISHED (or raise on ERROR/timeout)."""
-        for attempt in range(15):
+        for _attempt in range(15):
             resp = client.get(
                 f"https://graph.facebook.com/v19.0/{container_id}",
                 params={"fields": "status_code,status", "access_token": token},
