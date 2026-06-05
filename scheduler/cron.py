@@ -354,10 +354,18 @@ def run_image_refresh() -> None:
                 or []
             )
 
+        logger.info(
+            "Image refresh: carousel_agent=%s thumbnail_agent=%s",
+            carousel_agent is not None,
+            thumbnail_agent is not None,
+        )
+
         # --- Carousels (scheduled + failed with no image) ---
         if carousel_agent:
             for status in ("scheduled", "failed"):
-                for c in _carousel_rows(status):
+                rows = _carousel_rows(status)
+                logger.info("Image refresh: found %d %s carousel(s) with no image", len(rows), status)
+                for c in rows:
                     try:
                         source = Post(
                             id=c["id"],
@@ -391,10 +399,15 @@ def run_image_refresh() -> None:
                     except Exception:
                         logger.exception("Failed refreshing carousel %s", c.get("id", "?")[:8])
 
+        else:
+            logger.warning("Image refresh: carousel_agent unavailable — skipping carousel regeneration")
+
         # --- Standard posts (scheduled + failed with no image) ---
         if thumbnail_agent:
             for status in ("scheduled", "failed"):
-                for p in _standard_rows(status):
+                rows = _standard_rows(status)
+                logger.info("Image refresh: found %d %s standard post(s) with no image", len(rows), status)
+                for p in rows:
                     try:
                         post_obj = Post(
                             id=p["id"],
