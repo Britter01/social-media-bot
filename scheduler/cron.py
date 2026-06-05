@@ -14,6 +14,10 @@ Every stage is wrapped so a single post or platform failing is logged and
 isolated, never crashing the worker. Media generation is best-effort:
 if thumbnail/video creation fails, the post still goes out as text where
 the platform allows it.
+
+Agent imports are intentionally lazy (inside each function) so that this
+module can be imported by the dashboard without requiring the full set of
+worker dependencies (anthropic, google-genai, apscheduler, etc.).
 """
 
 from __future__ import annotations
@@ -24,14 +28,6 @@ import sys
 from datetime import UTC, datetime
 from itertools import cycle
 
-from agents.carousel_agent import CarouselAgent
-from agents.content_agent import ContentAgent
-from agents.publisher_agent import PublisherAgent
-from agents.quality_agent import QualityAgent, QualityError
-from agents.research_agent import ResearchAgent
-from agents.scheduler_agent import SchedulerAgent
-from agents.thumbnail_agent import ThumbnailAgent
-from agents.video_agent import VideoAgent
 from core.config import config, configure_logging
 from core.database import get_database
 from core.models import Platform, Post, PostStatus
@@ -52,6 +48,12 @@ def _round_robin_platforms(pillars: list[str], platforms: list[str]) -> list[tup
 
 def run_content_pipeline() -> None:
     """Generate, enrich, and schedule a batch of posts."""
+    from agents.content_agent import ContentAgent
+    from agents.quality_agent import QualityAgent, QualityError
+    from agents.scheduler_agent import SchedulerAgent
+    from agents.thumbnail_agent import ThumbnailAgent
+    from agents.video_agent import VideoAgent
+
     logger.info("=== Content pipeline starting ===")
     try:
         db = get_database()
@@ -61,7 +63,6 @@ def run_content_pipeline() -> None:
         logger.exception("Content pipeline could not initialise; skipping run")
         return
 
-    # Lazily create media agents; they may be unconfigured in some deploys.
     thumbnail_agent = _safe_init(ThumbnailAgent, "thumbnail")
     video_agent = _safe_init(VideoAgent, "video")
     quality_agent = _safe_init(QualityAgent, "quality")
@@ -105,6 +106,10 @@ def run_research_pipeline() -> None:
     here. With the gate off, ``run()`` returns content-ready posts, which
     we finalise and schedule immediately.
     """
+    from agents.content_agent import ContentAgent
+    from agents.research_agent import ResearchAgent
+    from agents.scheduler_agent import SchedulerAgent
+
     logger.info("=== Research pipeline starting ===")
     try:
         db = get_database()
@@ -132,6 +137,10 @@ def run_approved_pipeline() -> None:
     marked ``approved``, generates content, then finalises and schedules
     each. Runs on a short interval so approvals go live promptly.
     """
+    from agents.content_agent import ContentAgent
+    from agents.research_agent import ResearchAgent
+    from agents.scheduler_agent import SchedulerAgent
+
     try:
         db = get_database()
         content_agent = ContentAgent()
@@ -162,12 +171,15 @@ def _finalise_posts(posts: list[Post], db, scheduler_agent, *, persist_insert: b
     rest continue. Set persist_insert=False when the posts are already in the
     database (e.g. inserted by generate_for_approved).
     """
+    from agents.carousel_agent import CarouselAgent
+    from agents.quality_agent import QualityAgent, QualityError
+    from agents.thumbnail_agent import ThumbnailAgent
+    from agents.video_agent import VideoAgent
+
     thumbnail_agent = _safe_init(ThumbnailAgent, "thumbnail")
     video_agent = _safe_init(VideoAgent, "video")
     quality_agent = _safe_init(QualityAgent, "quality")
 
-    # Track the last scheduled time per platform so each post in a batch
-    # lands on a different day rather than all stacking on the same slot.
     last_slot: dict[str, datetime] = {}
 
     carousel_agent = _safe_init(CarouselAgent, "carousel")
@@ -197,8 +209,6 @@ def _finalise_posts(posts: list[Post], db, scheduler_agent, *, persist_insert: b
                 db.upsert(post)
             scheduled += 1
 
-            # Generate carousel variant for Instagram/Facebook posts.
-            # Scheduled after the regular post so the two don't compete.
             if carousel_agent and post.platform in (
                 Platform.INSTAGRAM.value,
                 Platform.FACEBOOK.value,
@@ -212,7 +222,6 @@ def _finalise_posts(posts: list[Post], db, scheduler_agent, *, persist_insert: b
                     scheduled += 1
                     logger.info("Created carousel variant for post %s", post.id)
 
-                    # Cross-post carousel to Facebook if Instagram was the source.
                     if (
                         post.platform == Platform.INSTAGRAM.value
                         and Platform.FACEBOOK.value in configured_platforms
@@ -256,6 +265,8 @@ def _generate_media(post: Post, thumbnail_agent, video_agent, quality_agent=None
 
     Video: best-effort, never raises.
     """
+    from agents.quality_agent import QualityError
+
     needs_video = post.platform in _VIDEO_PLATFORMS
 
     if thumbnail_agent is not None:
@@ -302,14 +313,16 @@ def run_image_refresh() -> None:
     image only — failed posts that already have an image are left alone so
     the user can retry them manually).
     """
+    import uuid as _uuid
+
+    from supabase import create_client
+
+    from agents.carousel_agent import CarouselAgent
+    from agents.scheduler_agent import SchedulerAgent
+    from agents.thumbnail_agent import ThumbnailAgent
+
     logger.info("=== Image refresh starting ===")
     try:
-        import uuid as _uuid
-
-        from supabase import create_client
-
-        from core.models import Post
-
         sb = create_client(config.supabase_url, config.supabase_key)
         thumbnail_agent = _safe_init(ThumbnailAgent, "thumbnail")
         carousel_agent = _safe_init(CarouselAgent, "carousel")
@@ -363,7 +376,6 @@ def run_image_refresh() -> None:
                             "thumbnail_url": slides[0]["image_url"] if slides else None,
                         }
                         if status == "failed" and slides:
-                            # Reschedule so the publisher picks it up.
                             scheduler_agent.schedule(source)
                             update["status"] = "scheduled"
                             update["scheduled_time"] = source.scheduled_time.isoformat()
@@ -415,6 +427,8 @@ def run_image_refresh() -> None:
 
 def run_publisher() -> None:
     """Publish every post whose scheduled time has arrived."""
+    from agents.publisher_agent import PublisherAgent
+
     try:
         db = get_database()
         publisher = PublisherAgent()
@@ -429,8 +443,6 @@ def run_publisher() -> None:
 
     logger.info("Publishing %d due post(s)", len(due))
     for post in due:
-        # Atomically claim the post first; if another worker already took it,
-        # skip — this is what prevents the same post going out twice.
         try:
             if not db.claim_for_publishing(post):
                 continue
@@ -456,9 +468,13 @@ def run_qc_retry() -> None:
     the thumbnail, and reschedules any that pass the second check. Posts that
     fail again are left as failed with an updated error message.
     """
-    try:
-        from supabase import create_client
+    from supabase import create_client
 
+    from agents.quality_agent import QualityAgent, QualityError
+    from agents.scheduler_agent import SchedulerAgent
+    from agents.thumbnail_agent import ThumbnailAgent
+
+    try:
         sb = create_client(config.supabase_url, config.supabase_key)
         thumbnail_agent = _safe_init(ThumbnailAgent, "thumbnail")
         quality_agent = _safe_init(QualityAgent, "quality")
@@ -481,8 +497,6 @@ def run_qc_retry() -> None:
     for row in rows:
         post = Post.from_row(row)
         try:
-            # Regenerate using the cost-effective flow: Imagen once, overlay
-            # QC'd in memory, upload only after passing.
             try:
                 _generate_media(
                     post, thumbnail_agent, video_agent=None, quality_agent=quality_agent
@@ -520,8 +534,6 @@ def build_scheduler():
 
     scheduler = BlockingScheduler(timezone=config.timezone)
 
-    # Research trending topics and schedule content from them at 05:30 local,
-    # ahead of the static content pipeline.
     scheduler.add_job(
         run_research_pipeline,
         trigger=CronTrigger(hour=5, minute=30, timezone=config.timezone),
@@ -531,8 +543,6 @@ def build_scheduler():
         misfire_grace_time=3600,
     )
 
-    # Pick up human-approved topics and schedule them every 15 minutes, so
-    # an approval goes live without waiting for the next day's run.
     scheduler.add_job(
         run_approved_pipeline,
         trigger=IntervalTrigger(minutes=15),
@@ -542,7 +552,6 @@ def build_scheduler():
         misfire_grace_time=600,
     )
 
-    # Generate and schedule content once a day at 06:00 local.
     scheduler.add_job(
         run_content_pipeline,
         trigger=CronTrigger(hour=6, minute=0, timezone=config.timezone),
@@ -552,7 +561,6 @@ def build_scheduler():
         misfire_grace_time=3600,
     )
 
-    # Check for due posts every 5 minutes.
     scheduler.add_job(
         run_publisher,
         trigger=IntervalTrigger(minutes=5),
@@ -562,7 +570,6 @@ def build_scheduler():
         misfire_grace_time=300,
     )
 
-    # Retry QC-failed posts every hour — regenerate thumbnail and recheck.
     scheduler.add_job(
         run_qc_retry,
         trigger=IntervalTrigger(hours=1),
@@ -572,7 +579,6 @@ def build_scheduler():
         misfire_grace_time=600,
     )
 
-    # Refresh images nightly at 02:00 — after the Imagen quota resets.
     scheduler.add_job(
         run_image_refresh,
         trigger=CronTrigger(hour=2, minute=0, timezone=config.timezone),
