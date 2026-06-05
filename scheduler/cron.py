@@ -517,6 +517,74 @@ def run_qc_retry() -> None:
     logger.info("QC retry finished: %d post(s) rescheduled", retried)
 
 
+def run_pending_commands() -> None:
+    """Execute any manual pipeline commands queued by the dashboard.
+
+    The dashboard inserts rows into ``pipeline_commands`` with status=pending.
+    This job (running every 2 min) picks them up, runs the appropriate function
+    in the worker process (which has all packages installed), and marks them done.
+    Unknown commands are marked failed so the dashboard can surface the error.
+    """
+    from supabase import create_client
+
+    try:
+        sb = create_client(config.supabase_url, config.supabase_key)
+    except Exception:
+        logger.exception("Command queue: could not connect to Supabase")
+        return
+
+    try:
+        rows = (
+            sb.table("pipeline_commands")
+            .select("*")
+            .eq("status", "pending")
+            .order("requested_at")
+            .execute()
+            .data
+            or []
+        )
+    except Exception:
+        # Table may not exist yet — silently skip until the user creates it.
+        logger.debug("pipeline_commands table not accessible; skipping command queue")
+        return
+
+    for row in rows:
+        cmd_id = row.get("id")
+        command = row.get("command", "")
+        logger.info("Command queue: executing '%s' (id=%s)", command, cmd_id)
+
+        sb.table("pipeline_commands").update(
+            {"status": "running", "started_at": datetime.now(UTC).isoformat()}
+        ).eq("id", cmd_id).execute()
+
+        error: str | None = None
+        try:
+            if command == "image_refresh":
+                run_image_refresh()
+            elif command == "publish":
+                run_publisher()
+            elif command == "all":
+                run_image_refresh()
+                run_publisher()
+            elif command == "content":
+                run_content_pipeline()
+            else:
+                error = f"Unknown command: {command}"
+                logger.warning("Command queue: %s", error)
+        except Exception as exc:
+            error = str(exc)
+            logger.exception("Command queue: '%s' failed", command)
+
+        sb.table("pipeline_commands").update(
+            {
+                "status": "failed" if error else "done",
+                "finished_at": datetime.now(UTC).isoformat(),
+                "error": error,
+            }
+        ).eq("id", cmd_id).execute()
+        logger.info("Command queue: '%s' finished (status=%s)", command, "failed" if error else "done")
+
+
 def _safe_init(agent_cls, label: str):
     """Instantiate an agent, returning None if it's unconfigured."""
     try:
@@ -586,6 +654,15 @@ def build_scheduler():
         max_instances=1,
         coalesce=True,
         misfire_grace_time=3600,
+    )
+
+    scheduler.add_job(
+        run_pending_commands,
+        trigger=IntervalTrigger(minutes=2),
+        id="command_queue",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=120,
     )
     return scheduler
 

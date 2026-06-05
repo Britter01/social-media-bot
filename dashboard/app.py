@@ -4,20 +4,13 @@ from __future__ import annotations
 
 import calendar
 import os
-import sys
 from collections import defaultdict
 from datetime import UTC, date, datetime
 
-# Ensure the project root is on sys.path so scheduler/cron imports work
-# when Streamlit runs this file from the dashboard/ subdirectory.
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, _PROJECT_ROOT)
-
-import streamlit as st  # noqa: E402
-import streamlit.components.v1 as components  # noqa: E402
-from dotenv import load_dotenv  # noqa: E402
-from supabase import create_client  # noqa: E402
+import streamlit as st
+import streamlit.components.v1 as components
+from dotenv import load_dotenv
+from supabase import create_client
 
 load_dotenv()
 
@@ -277,46 +270,48 @@ st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
 
 # ── Manual controls ───────────────────────────────────────────────────────────
 
+
+def _queue_command(command: str) -> None:
+    """Insert a pipeline command for the worker to pick up within ~2 minutes."""
+    db.table("pipeline_commands").insert(
+        {
+            "command": command,
+            "status": "pending",
+            "requested_at": datetime.now(UTC).isoformat(),
+        }
+    ).execute()
+
+
 with st.expander("⚡ Manual controls — run pipeline jobs now"):
-    st.caption("Use these to trigger jobs immediately without waiting for the scheduler.")
+    st.caption(
+        "Commands are picked up by the worker within **2 minutes**. "
+        "Refresh the page after that to see the results."
+    )
     ctrl_c1, ctrl_c2, ctrl_c3 = st.columns(3)
 
     with ctrl_c1:
         if st.button("🖼 Generate missing images", use_container_width=True):
-            with st.spinner("Generating images… this may take a minute"):
-                try:
-                    from scheduler.cron import run_image_refresh
-
-                    run_image_refresh()
-                    st.success("Image refresh complete — reload the page to see updated posts.")
-                    st.cache_data.clear()
-                except Exception as exc:
-                    st.error(f"Image refresh failed: {exc}")
+            try:
+                _queue_command("image_refresh")
+                st.success("✅ Queued — images will regenerate within 2 minutes.")
+            except Exception as exc:
+                st.error(f"Failed to queue command: {exc}")
 
     with ctrl_c2:
         if st.button("📤 Publish due posts", use_container_width=True):
-            with st.spinner("Publishing…"):
-                try:
-                    from scheduler.cron import run_publisher
-
-                    run_publisher()
-                    st.success("Publisher run complete — reload to see results.")
-                    st.cache_data.clear()
-                except Exception as exc:
-                    st.error(f"Publisher failed: {exc}")
+            try:
+                _queue_command("publish")
+                st.success("✅ Queued — publisher will run within 2 minutes.")
+            except Exception as exc:
+                st.error(f"Failed to queue command: {exc}")
 
     with ctrl_c3:
         if st.button("⚡ Run everything now", use_container_width=True, type="primary"):
-            with st.spinner("Running image refresh then publishing…"):
-                try:
-                    from scheduler.cron import run_image_refresh, run_publisher
-
-                    run_image_refresh()
-                    run_publisher()
-                    st.success("Done — reload the page to see the latest state.")
-                    st.cache_data.clear()
-                except Exception as exc:
-                    st.error(f"Pipeline run failed: {exc}")
+            try:
+                _queue_command("all")
+                st.success("✅ Queued — image refresh + publish will run within 2 minutes.")
+            except Exception as exc:
+                st.error(f"Failed to queue command: {exc}")
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -503,23 +498,6 @@ with tab_posts:
 # ── Scheduled ─────────────────────────────────────────────────────────────────
 
 with tab_scheduled:
-    if scheduled:
-        with st.expander("🖼  Refresh logos on scheduled posts"):
-            st.caption(
-                "Clears thumbnails so the nightly job (02:00 UTC) regenerates them "
-                "with the latest logo style. To regenerate immediately instead, run: "
-                "python -m scripts.regen_thumbnails from the Railway Console."
-            )
-            if st.button("Clear all thumbnails (regen tonight)", key="clear_thumbs"):
-                ids = [p["id"] for p in scheduled if p.get("id")]
-                db.table("posts").update({"thumbnail_url": None}).in_("id", ids).execute()
-                st.success(
-                    f"Cleared thumbnails for {len(ids)} post(s) "
-                    "(standard + carousel). The nightly image refresh will regenerate them."
-                )
-                st.cache_data.clear()
-                st.rerun()
-
     if not scheduled:
         st.info("📅  Nothing scheduled yet.")
     else:
