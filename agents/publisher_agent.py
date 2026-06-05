@@ -393,7 +393,7 @@ class PublisherAgent:
         self._cfg.require("linkedin_access_token", "linkedin_author_urn")
         headers = {
             "Authorization": f"Bearer {self._cfg.linkedin_access_token}",
-            "LinkedIn-Version": "202506",
+            "LinkedIn-Version": "202505",
             "X-Restli-Protocol-Version": "2.0.0",
             "Content-Type": "application/json",
         }
@@ -403,8 +403,6 @@ class PublisherAgent:
             "visibility": "PUBLIC",
             "distribution": {
                 "feedDistribution": "MAIN_FEED",
-                "targetEntities": [],
-                "thirdPartyDistributionChannels": [],
             },
             "lifecycleState": "PUBLISHED",
             "isReshareDisabledByAuthor": False,
@@ -415,6 +413,13 @@ class PublisherAgent:
                 headers=headers,
                 json=payload,
             )
+            if not resp.is_success:
+                logger.error(
+                    "LinkedIn %s — headers: %s — body: %s",
+                    resp.status_code,
+                    dict(resp.headers),
+                    resp.text[:500],
+                )
             resp.raise_for_status()
             return resp.headers.get("x-restli-id") or ""
 

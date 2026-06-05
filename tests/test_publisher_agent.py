@@ -63,6 +63,8 @@ class _FakeResponse:
         self._payload = payload
         self.headers = headers or {}
         self.status_code = status_code
+        self.is_success = status_code < 300
+        self.status_code = status_code
         self.text = str(payload)
 
     def raise_for_status(self):
