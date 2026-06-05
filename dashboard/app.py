@@ -527,14 +527,28 @@ with tab_scheduled:
                     with st.container(border=True):
                         _post_card(p, _sched_str(p), "scheduled")
                         pid = p.get("id", "")
-                        if pid and st.button(
-                            "🗑 Dismiss", key=f"dismiss_sched_{pid}", use_container_width=True
-                        ):
-                            db.table("posts").update({"status": "dismissed"}).eq(
-                                "id", pid
-                            ).execute()
-                            st.cache_data.clear()
-                            st.rerun()
+                        btn_pub, btn_dis = st.columns(2)
+                        with btn_pub:
+                            if pid and st.button(
+                                "📤 Publish now",
+                                key=f"pub_sched_{pid}",
+                                use_container_width=True,
+                                type="primary",
+                            ):
+                                db.table("posts").update(
+                                    {"scheduled_time": datetime.now(UTC).isoformat()}
+                                ).eq("id", pid).execute()
+                                _queue_command("publish")
+                                st.success("Queued — will publish within 2 minutes.")
+                        with btn_dis:
+                            if pid and st.button(
+                                "🗑 Dismiss", key=f"dismiss_sched_{pid}", use_container_width=True
+                            ):
+                                db.table("posts").update({"status": "dismissed"}).eq(
+                                    "id", pid
+                                ).execute()
+                                st.cache_data.clear()
+                                st.rerun()
         if car:
             st.markdown(
                 "<div style='font-size:16px;font-weight:700;color:#7C3AED;padding:16px 0 4px'>🎠 Carousels</div>",
@@ -546,14 +560,28 @@ with tab_scheduled:
                     with st.container(border=True):
                         _post_card(p, _sched_str(p), "scheduled")
                         pid = p.get("id", "")
-                        if pid and st.button(
-                            "🗑 Dismiss", key=f"dismiss_car_{pid}", use_container_width=True
-                        ):
-                            db.table("posts").update({"status": "dismissed"}).eq(
-                                "id", pid
-                            ).execute()
-                            st.cache_data.clear()
-                            st.rerun()
+                        btn_pub, btn_dis = st.columns(2)
+                        with btn_pub:
+                            if pid and st.button(
+                                "📤 Publish now",
+                                key=f"pub_car_{pid}",
+                                use_container_width=True,
+                                type="primary",
+                            ):
+                                db.table("posts").update(
+                                    {"scheduled_time": datetime.now(UTC).isoformat()}
+                                ).eq("id", pid).execute()
+                                _queue_command("publish")
+                                st.success("Queued — will publish within 2 minutes.")
+                        with btn_dis:
+                            if pid and st.button(
+                                "🗑 Dismiss", key=f"dismiss_car_{pid}", use_container_width=True
+                            ):
+                                db.table("posts").update({"status": "dismissed"}).eq(
+                                    "id", pid
+                                ).execute()
+                                st.cache_data.clear()
+                                st.rerun()
 
 # ── Calendar ──────────────────────────────────────────────────────────────────
 
