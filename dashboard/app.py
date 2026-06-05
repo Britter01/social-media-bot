@@ -4,13 +4,20 @@ from __future__ import annotations
 
 import calendar
 import os
+import sys
 from collections import defaultdict
 from datetime import UTC, date, datetime
 
-import streamlit as st
-import streamlit.components.v1 as components
-from dotenv import load_dotenv
-from supabase import create_client
+# Ensure the project root is on sys.path so scheduler/cron imports work
+# when Streamlit runs this file from the dashboard/ subdirectory.
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
+import streamlit as st  # noqa: E402
+import streamlit.components.v1 as components  # noqa: E402
+from dotenv import load_dotenv  # noqa: E402
+from supabase import create_client  # noqa: E402
 
 load_dotenv()
 
