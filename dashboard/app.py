@@ -498,23 +498,6 @@ with tab_posts:
 # ── Scheduled ─────────────────────────────────────────────────────────────────
 
 with tab_scheduled:
-    if scheduled:
-        with st.expander("🖼  Refresh logos on scheduled posts"):
-            st.caption(
-                "Clears thumbnails so the nightly job (02:00 UTC) regenerates them "
-                "with the latest logo style. To regenerate immediately instead, run: "
-                "python -m scripts.regen_thumbnails from the Railway Console."
-            )
-            if st.button("Clear all thumbnails (regen tonight)", key="clear_thumbs"):
-                ids = [p["id"] for p in scheduled if p.get("id")]
-                db.table("posts").update({"thumbnail_url": None}).in_("id", ids).execute()
-                st.success(
-                    f"Cleared thumbnails for {len(ids)} post(s) "
-                    "(standard + carousel). The nightly image refresh will regenerate them."
-                )
-                st.cache_data.clear()
-                st.rerun()
-
     if not scheduled:
         st.info("📅  Nothing scheduled yet.")
     else:
