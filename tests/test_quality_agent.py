@@ -104,7 +104,8 @@ def test_image_fetch_failure_skips_check(base_config):
     agent._client.messages.create.assert_not_called()
 
 
-def test_image_non_json_response_skips_check(base_config):
+def test_image_non_json_response_fails_closed(base_config):
+    """A non-JSON QC response must raise QualityError (fail closed, not silently pass)."""
     agent = _agent(base_config)
     agent._client.messages.create.return_value = _msg("looks good to me")
     post = _post(thumbnail_url="https://test.supabase.co/thumb.jpg")
@@ -113,7 +114,8 @@ def test_image_non_json_response_skips_check(base_config):
         "_fetch_image",
         return_value=("base64data", "image/jpeg"),
     ):
-        agent.review(post)  # non-JSON response must not raise
+        with pytest.raises(QualityError):
+            agent.review(post)
 
 
 def test_no_thumbnail_skips_image_check(base_config):

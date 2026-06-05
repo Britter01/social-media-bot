@@ -467,6 +467,7 @@ class PublisherAgent:
         self._cfg.require("tiktok_access_token")
         if not post.video_url:
             raise PublishError("TikTok requires a video (video_url)")
+        _validate_media_url(post.video_url, label="video_url")
 
         headers = {
             "Authorization": f"Bearer {self._cfg.tiktok_access_token}",

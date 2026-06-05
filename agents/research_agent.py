@@ -37,6 +37,7 @@ Model choice (no Opus anywhere):
 from __future__ import annotations
 
 import logging
+from urllib.parse import urlparse
 
 import anthropic
 from pydantic import BaseModel, Field
@@ -45,6 +46,20 @@ from core.config import Config, config
 from core.models import Pillar, Platform, Post, Topic, TopicStatus
 
 logger = logging.getLogger(__name__)
+
+
+def _is_safe_url(url: str) -> bool:
+    """Return True only for well-formed http/https URLs.
+
+    Rejects javascript:, data:, and other schemes that could be rendered
+    as clickable links in the dashboard and used for phishing or XSS.
+    """
+    try:
+        p = urlparse(url)
+        return p.scheme in {"http", "https"} and bool(p.netloc)
+    except Exception:
+        return False
+
 
 # Server-side web search tool. The 2026-02-09 version adds dynamic result
 # filtering on Sonnet/Opus; on the Haiku tier we use here it runs as a plain
@@ -424,7 +439,7 @@ class ResearchAgent:
             content_angle=scored.content_angle.strip(),
             relevance_score=_clamp_score(scored.relevance_score),
             rationale=scored.rationale.strip(),
-            sources=[s for s in scored.sources if s],
+            sources=[s for s in scored.sources if _is_safe_url(s)],
         )
 
     def _coerce_pillar(self, value: str) -> str:

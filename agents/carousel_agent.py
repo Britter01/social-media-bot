@@ -258,8 +258,8 @@ class CarouselAgent:
                 image_url = self._upload(carousel_id, i, final_bytes)
                 result.append(
                     {
-                        "headline": slide["headline"],
-                        "body": slide["body"],
+                        "headline": slide["headline"][:120],
+                        "body": slide["body"][:400],
                         "image_url": image_url,
                         "role": slide["role"],
                     }

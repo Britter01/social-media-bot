@@ -5,6 +5,7 @@ from __future__ import annotations
 import calendar
 import hmac
 import html
+import logging
 import os
 import time
 from collections import defaultdict
@@ -16,6 +17,8 @@ from dotenv import load_dotenv
 from supabase import create_client
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 # ── Page config ───────────────────────────────────────────────────────────────
 
@@ -327,24 +330,27 @@ with st.expander("⚡ Manual controls — run pipeline jobs now"):
             try:
                 _queue_command("image_refresh")
                 st.success("✅ Queued — images will regenerate within 2 minutes.")
-            except Exception as exc:
-                st.error(f"Failed to queue command: {exc}")
+            except Exception:
+                logger.exception("Failed to queue command")
+                st.error("Failed to queue command — check server logs.")
 
     with ctrl_c2:
         if st.button("📤 Publish due posts", use_container_width=True):
             try:
                 _queue_command("publish")
                 st.success("✅ Queued — publisher will run within 2 minutes.")
-            except Exception as exc:
-                st.error(f"Failed to queue command: {exc}")
+            except Exception:
+                logger.exception("Failed to queue command")
+                st.error("Failed to queue command — check server logs.")
 
     with ctrl_c3:
         if st.button("⚡ Run everything now", use_container_width=True, type="primary"):
             try:
                 _queue_command("all")
                 st.success("✅ Queued — image refresh + publish will run within 2 minutes.")
-            except Exception as exc:
-                st.error(f"Failed to queue command: {exc}")
+            except Exception:
+                logger.exception("Failed to queue command")
+                st.error("Failed to queue command — check server logs.")
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -713,7 +719,7 @@ with tab_calendar:
             for p in day_posts[:8]:
                 plat = (p.get("platform") or "").lower()
                 col = PLATFORM_COLORS.get(plat, "#A1A1A6")
-                dots += f'<div style="width:11px;height:11px;border-radius:50%;background:{col};flex-shrink:0;border:2px solid rgba(0,0,0,0.15)" title="{p.get("topic", "")}"></div>'
+                dots += f'<div style="width:11px;height:11px;border-radius:50%;background:{col};flex-shrink:0;border:2px solid rgba(0,0,0,0.15)" title="{html.escape(str(p.get("topic", "")))}"></div>'
             count_html = (
                 f'<div style="font-size:10px;font-weight:700;color:#0066CC;margin-top:3px">{len(day_posts)} post{"s" if len(day_posts) != 1 else ""}</div>'
                 if day_posts

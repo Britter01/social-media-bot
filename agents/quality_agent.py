@@ -137,7 +137,7 @@ class QualityAgent:
     ) -> None:
         """Core vision check — shared by URL and bytes paths."""
         resp = self._client.messages.create(
-            model=self._cfg.model_creative,
+            model=self._cfg.model_fast,
             max_tokens=128,
             system=self._IMAGE_SYSTEM,
             messages=[
@@ -161,13 +161,13 @@ class QualityAgent:
         raw = resp.content[0].text.strip()
         try:
             result = json.loads(raw)
-        except json.JSONDecodeError:
-            logger.warning(
-                "QC: non-JSON image response for post %s: %r — skipping",
+        except json.JSONDecodeError as exc:
+            logger.error(
+                "QC: non-JSON image response for post %s: %r — failing closed",
                 post.id,
                 raw,
             )
-            return
+            raise QualityError(f"{label}: image QC returned unparseable response") from exc
 
         if not result.get("ok", True):
             issue = result.get("issue", "unknown image quality issue")
