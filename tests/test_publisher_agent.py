@@ -48,6 +48,13 @@ def test_instagram_requires_thumbnail(base_config):
     assert post.status == PostStatus.FAILED.value
 
 
+def test_facebook_requires_thumbnail(base_config):
+    post = Post(pillar="Review", platform="facebook", caption="Hi")
+    with pytest.raises(PublishError):
+        PublisherAgent(base_config).publish(post)
+    assert post.status == PostStatus.FAILED.value
+
+
 # --- Fake httpx client for the Instagram happy path -------------------
 
 

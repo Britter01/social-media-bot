@@ -270,6 +270,9 @@ class PublisherAgent:
                 )
             return self._publish_facebook_carousel(post)
 
+        if not post.thumbnail_url:
+            raise PublishError("Facebook requires an image (thumbnail_url)")
+
         page_id = self._cfg.facebook_page_id
         token = self._cfg.instagram_access_token
         base = f"https://graph.facebook.com/v19.0/{page_id}"
