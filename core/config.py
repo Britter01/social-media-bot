@@ -110,6 +110,9 @@ class Config:
     dry_run: bool = True  # Safe default — must explicitly set DRY_RUN=false to post live
     log_level: str = "INFO"
     posts_per_run: int = 1
+    # Only generate a carousel for 1 in every N Instagram/Facebook posts.
+    # Carousels cost ~6–8× more than standard posts (Imagen × slides).
+    carousel_every_n: int = 3
 
     # --- Research agent -------------------------------------------------
     # Minimum brand-relevance score (0-100) a topic must reach to be fed
@@ -194,6 +197,7 @@ class Config:
             dry_run=_get_bool("DRY_RUN", True),
             log_level=_get("LOG_LEVEL", "INFO"),
             posts_per_run=_get_int("POSTS_PER_RUN", 1),
+            carousel_every_n=_get_int("CAROUSEL_EVERY_N", 3),
             min_topic_relevance=_get_int("MIN_TOPIC_RELEVANCE", 70),
             topics_per_run=_get_int("TOPICS_PER_RUN", 3),
             require_topic_approval=_get_bool("REQUIRE_TOPIC_APPROVAL", True),

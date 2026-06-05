@@ -183,7 +183,9 @@ def _finalise_posts(posts: list[Post], db, scheduler_agent, *, persist_insert: b
     last_slot: dict[str, datetime] = {}
 
     carousel_agent = _safe_init(CarouselAgent, "carousel")
-    configured_platforms = set(config.configured_platforms())
+    # Count posts on carousel-eligible platforms so we only create a carousel
+    # every carousel_every_n posts, not for every single post.
+    carousel_counter = 0
 
     scheduled = 0
     for post in posts:
@@ -213,37 +215,26 @@ def _finalise_posts(posts: list[Post], db, scheduler_agent, *, persist_insert: b
                 Platform.INSTAGRAM.value,
                 Platform.FACEBOOK.value,
             ):
-                try:
-                    carousel = carousel_agent.create_from_post(post, quality_agent=quality_agent)
-                    carousel_after = last_slot.get(post.platform)
-                    scheduler_agent.schedule(carousel, after=carousel_after)
-                    last_slot[post.platform] = carousel.scheduled_time
-                    db.insert(carousel)
-                    scheduled += 1
-                    logger.info("Created carousel variant for post %s", post.id)
-
-                    if (
-                        post.platform == Platform.INSTAGRAM.value
-                        and Platform.FACEBOOK.value in configured_platforms
-                    ):
-                        fb_carousel = Post(
-                            pillar=carousel.pillar,
-                            platform=Platform.FACEBOOK.value,
-                            topic=carousel.topic,
-                            caption=carousel.caption,
-                            hashtags=list(carousel.hashtags),
-                            title=carousel.title,
-                            thumbnail_url=carousel.thumbnail_url,
-                            post_type="carousel",
-                            slides=list(carousel.slides),
+                carousel_counter += 1
+                if carousel_counter % config.carousel_every_n == 0:
+                    try:
+                        carousel = carousel_agent.create_from_post(
+                            post, quality_agent=quality_agent
                         )
-                        fb_after = last_slot.get(Platform.FACEBOOK.value)
-                        scheduler_agent.schedule(fb_carousel, after=fb_after)
-                        last_slot[Platform.FACEBOOK.value] = fb_carousel.scheduled_time
-                        db.insert(fb_carousel)
+                        carousel_after = last_slot.get(post.platform)
+                        scheduler_agent.schedule(carousel, after=carousel_after)
+                        last_slot[post.platform] = carousel.scheduled_time
+                        db.insert(carousel)
                         scheduled += 1
-                except Exception:
-                    logger.exception("Carousel creation failed for post %s; continuing", post.id)
+                        logger.info(
+                            "Created carousel for post %s (1-in-%d)",
+                            post.id,
+                            config.carousel_every_n,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Carousel creation failed for post %s; continuing", post.id
+                        )
 
         except Exception:
             logger.exception("Failed finalising post %s", post.id)
@@ -265,8 +256,6 @@ def _generate_media(post: Post, thumbnail_agent, video_agent, quality_agent=None
 
     Video: best-effort, never raises.
     """
-    from agents.quality_agent import QualityError
-
     needs_video = post.platform in _VIDEO_PLATFORMS
 
     if thumbnail_agent is not None:
@@ -280,17 +269,8 @@ def _generate_media(post: Post, thumbnail_agent, video_agent, quality_agent=None
             final_bytes = thumbnail_agent.apply_overlay(raw_bytes)
 
             if quality_agent is not None:
-                try:
-                    quality_agent.check_image_bytes(post, final_bytes)
-                except QualityError as exc:
-                    logger.warning(
-                        "QC: overlay failed for post %s: %s — re-applying (no new Imagen call)",
-                        post.id,
-                        exc,
-                    )
-                    final_bytes = thumbnail_agent.apply_overlay(raw_bytes)
-                    # Raises QualityError if still wrong — caller handles it.
-                    quality_agent.check_image_bytes(post, final_bytes)
+                # Raises QualityError if bad — caller marks the post failed.
+                quality_agent.check_image_bytes(post, final_bytes)
 
             try:
                 thumbnail_agent.upload(post, final_bytes)
@@ -599,6 +579,31 @@ def run_pending_commands() -> None:
         logger.info("Command queue: '%s' finished (status=%s)", command, status_str)
 
 
+def run_cleanup_commands() -> None:
+    """Delete pipeline_commands rows older than 7 days to keep the table small."""
+    from supabase import create_client
+
+    try:
+        sb = create_client(config.supabase_url, config.supabase_key)
+    except Exception:
+        logger.exception("Cleanup: could not connect to Supabase")
+        return
+
+    try:
+        cutoff = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+        from datetime import timedelta
+
+        cutoff -= timedelta(days=7)
+        result = (
+            sb.table("pipeline_commands").delete().lt("requested_at", cutoff.isoformat()).execute()
+        )
+        deleted = len(result.data) if result.data else 0
+        if deleted:
+            logger.info("Cleanup: deleted %d old pipeline_commands row(s)", deleted)
+    except Exception:
+        logger.exception("Cleanup: failed to prune pipeline_commands")
+
+
 def _safe_init(agent_cls, label: str):
     """Instantiate an agent, returning None if it's unconfigured."""
     try:
@@ -654,7 +659,7 @@ def build_scheduler():
 
     scheduler.add_job(
         run_qc_retry,
-        trigger=IntervalTrigger(hours=1),
+        trigger=IntervalTrigger(hours=4),
         id="qc_retry",
         max_instances=1,
         coalesce=True,
@@ -677,6 +682,15 @@ def build_scheduler():
         max_instances=1,
         coalesce=True,
         misfire_grace_time=120,
+    )
+
+    scheduler.add_job(
+        run_cleanup_commands,
+        trigger=CronTrigger(day_of_week="sun", hour=3, minute=0, timezone=config.timezone),
+        id="cleanup_commands",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
     )
     return scheduler
 

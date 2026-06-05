@@ -166,7 +166,7 @@ db = get_db()
 # ── Data ──────────────────────────────────────────────────────────────────────
 
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=300)
 def load_topics():
     return (
         db.table("topics").select("*").order("relevance_score", desc=True).limit(200).execute().data
@@ -174,7 +174,7 @@ def load_topics():
     )
 
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=300)
 def load_posts():
     return (
         db.table("posts").select("*").order("scheduled_time", desc=False).limit(500).execute().data
