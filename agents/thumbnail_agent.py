@@ -36,15 +36,23 @@ _ASPECT_RATIO = {
 
 def _build_prompt(post: Post, brand_name: str) -> str:
     """Turn a post into a clean, on-brand image prompt."""
-    subject = post.topic or post.title or post.pillar
+    # Use topic/title as a visual concept, but truncate at a word boundary to
+    # avoid Imagen echoing a long verbatim title back as in-image text.
+    raw = post.topic or post.title or post.pillar
+    if len(raw) > 72:
+        truncated = raw[:72].rsplit(" ", 1)[0]
+    else:
+        truncated = raw
     return (
-        f"Editorial lifestyle photograph. Theme: {post.pillar}. Subject: {subject}. "
+        f"Editorial lifestyle photograph. Visual theme: {post.pillar}. "
+        f"Concept: {truncated}. "
         "Clean minimal composition, soft natural light, modern technology in a beautifully "
         "lived-in space, warm and confident mood, high detail. "
-        "The image must contain absolutely no text, no letters, no words, no numbers, "
-        "no brand names, no logos, no watermarks, no signs, no labels, and no readable "
-        "characters of any kind anywhere in the image. "
-        "Any device screens must display only abstract blurred patterns — never text."
+        "CRITICAL — absolutely no text anywhere: no letters, words, numbers, titles, "
+        "captions, labels, signs, watermarks, logos, or any readable characters — "
+        "not even partially visible or blurred. "
+        "Do NOT render any words from this prompt as visible text in the image. "
+        "Device screens must show only abstract blurred patterns, never text or UI."
     )
 
 

@@ -582,7 +582,8 @@ def run_pending_commands() -> None:
                 "error": error,
             }
         ).eq("id", cmd_id).execute()
-        logger.info("Command queue: '%s' finished (status=%s)", command, "failed" if error else "done")
+        status_str = "failed" if error else "done"
+        logger.info("Command queue: '%s' finished (status=%s)", command, status_str)
 
 
 def _safe_init(agent_cls, label: str):
