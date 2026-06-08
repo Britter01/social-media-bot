@@ -393,7 +393,7 @@ class PublisherAgent:
         self._cfg.require("linkedin_access_token", "linkedin_author_urn")
         headers = {
             "Authorization": f"Bearer {self._cfg.linkedin_access_token}",
-            "LinkedIn-Version": "202504",
+            "LinkedIn-Version": "202602",
             "X-Restli-Protocol-Version": "2.0.0",
             "Content-Type": "application/json",
         }
