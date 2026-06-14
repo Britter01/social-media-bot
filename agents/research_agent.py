@@ -114,8 +114,27 @@ class TopicSlate(BaseModel):
     topics: list[ScoredTopic]
 
 
-def _system_prompt(brand_name: str, founder: str, tagline: str) -> str:
-    """The large, stable brand brief that gets prompt-cached."""
+_PLATFORM_FIT = {
+    "instagram": "instagram (visual, lifestyle)",
+    "twitter": "twitter (fast takes, news)",
+    "linkedin": "linkedin (professional insight)",
+    "youtube": "youtube (explainers, reviews)",
+    "tiktok": "tiktok (short, energetic, native video)",
+}
+
+
+def _system_prompt(
+    brand_name: str,
+    founder: str,
+    tagline: str,
+    enabled_platforms: list[str] | None = None,
+) -> str:
+    """The large, stable brand brief that gets prompt-cached.
+
+    ``enabled_platforms`` restricts which platforms the strategist may pick.
+    Platforms paused via DISABLED_PLATFORMS are omitted entirely so the model
+    never assigns a topic to a platform we aren't publishing to.
+    """
     pillars = (
         "AI Guide — practical, accessible explainers that make AI useful today.\n"
         "Tech Lifestyle — how good technology fits into a well-lived life.\n"
@@ -123,6 +142,11 @@ def _system_prompt(brand_name: str, founder: str, tagline: str) -> str:
         "Fitness Tech — wearables, apps, and gear for a healthier life.\n"
         "Review — honest, hands-on verdicts. Pros, cons, who it's for."
     )
+    allowed = [p for p in (enabled_platforms or list(_PLATFORM_FIT)) if p in _PLATFORM_FIT]
+    if not allowed:  # defensive: never leave the model with no choice
+        allowed = list(_PLATFORM_FIT)
+    platform_fit = ", ".join(_PLATFORM_FIT[p] for p in allowed)
+    quoted = ", ".join(f"'{p}'" for p in allowed)
     return (
         f"You are the content strategist for {brand_name}, founded by {founder}.\n"
         f'Tagline: "{tagline}"\n\n'
@@ -132,9 +156,9 @@ def _system_prompt(brand_name: str, founder: str, tagline: str) -> str:
         "hype-chasers, no fake news, no clickbait.\n\n"
         "CONTENT PILLARS:\n"
         f"{pillars}\n\n"
-        "PLATFORM FIT: instagram (visual, lifestyle), twitter (fast takes, news), "
-        "linkedin (professional insight), youtube (explainers, reviews), "
-        "tiktok (short, energetic, native video).\n\n"
+        f"PLATFORM FIT: {platform_fit}.\n"
+        f"You may ONLY assign a topic to one of these platforms: {quoted}. "
+        "Never assign a topic to any other platform.\n\n"
         "Favour topics that are timely, specific, and let the brand add real value. "
         "Penalise vague, off-brand, or purely sensational topics. Never invent "
         "products, specs, or events."
@@ -162,7 +186,12 @@ class ResearchAgent:
         self._client = anthropic.Anthropic(api_key=cfg.anthropic_api_key)
         self._content_agent = content_agent
         self._db = db
-        self._system = _system_prompt(cfg.brand_name, cfg.brand_founder, cfg.brand_tagline)
+        self._system = _system_prompt(
+            cfg.brand_name,
+            cfg.brand_founder,
+            cfg.brand_tagline,
+            enabled_platforms=cfg.enabled_platforms(),
+        )
 
     # --- Public API ------------------------------------------------------
 
@@ -192,10 +221,15 @@ class ResearchAgent:
         """
         threshold = self._cfg.min_topic_relevance
         cap = limit if limit is not None else self._cfg.topics_per_run
+        disabled = set(self._cfg.disabled_platforms)
 
         eligible = []
         for topic in topics:
-            if topic.relevance_score >= threshold:
+            if topic.platform in disabled:
+                # Platform paused via DISABLED_PLATFORMS — never surface it for
+                # approval, generate content, or post it.
+                topic.mark(TopicStatus.REJECTED)
+            elif topic.relevance_score >= threshold:
                 eligible.append(topic)
             else:
                 topic.mark(TopicStatus.REJECTED)
@@ -243,8 +277,21 @@ class ResearchAgent:
             return posts
 
         configured = set(self._cfg.configured_platforms()) if self._cfg else set()
+        disabled = set(self._cfg.disabled_platforms) if self._cfg else set()
 
         for topic in topics:
+            # Safety net: never generate content for a paused platform, even if
+            # an old topic for it slipped through approval before it was paused.
+            if topic.platform in disabled:
+                logger.info("Skipping topic %s — platform %r is disabled", topic.id, topic.platform)
+                topic.mark(TopicStatus.REJECTED)
+                if persist and self._db is not None:
+                    try:
+                        self._db.upsert_topic(topic)
+                    except Exception:
+                        logger.exception("Could not update disabled topic %s", topic.id)
+                continue
+
             post = topic.to_post()
             try:
                 self._content_agent.generate(post)

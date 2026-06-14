@@ -146,6 +146,56 @@ def test_linkedin_derives_author_from_userinfo(base_config, monkeypatch):
     assert post.platform_post_id == "urn:li:share:7"
 
 
+def test_linkedin_attaches_image(base_config, monkeypatch):
+    """A post with a thumbnail registers, uploads, and references an image asset."""
+    state = {}
+
+    class _LinkedInClient(_FakeClient):
+        def get(self, url, **kwargs):
+            if url.endswith("/userinfo"):
+                return _FakeResponse({"sub": "abc"})
+            # Image download from storage.
+            resp = _FakeResponse({})
+            resp.content = b"\x89PNG-bytes"
+            return resp
+
+        def put(self, url, **kwargs):
+            state["uploaded"] = kwargs.get("content")
+            return _FakeResponse({})
+
+        def post(self, url, **kwargs):
+            if url.endswith("registerUpload"):
+                return _FakeResponse(
+                    {
+                        "value": {
+                            "asset": "urn:li:digitalmediaAsset:XYZ",
+                            "uploadMechanism": {
+                                "com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest": {
+                                    "uploadUrl": "https://upload.example/abc"
+                                }
+                            },
+                        }
+                    }
+                )
+            # The ugcPosts call itself.
+            state["share"] = kwargs["json"]["specificContent"]["com.linkedin.ugc.ShareContent"]
+            return _FakeResponse({}, headers={"x-restli-id": "urn:li:share:42"})
+
+    monkeypatch.setattr(httpx, "Client", _LinkedInClient)
+    post = Post(
+        pillar="Productivity",
+        platform="linkedin",
+        caption="Focus.",
+        thumbnail_url="https://qfyqoxpcoinlbxgjsihn.supabase.co/storage/v1/object/public/media/t.png",
+    )
+    PublisherAgent(base_config).publish(post)
+
+    assert state["uploaded"] == b"\x89PNG-bytes"
+    assert state["share"]["shareMediaCategory"] == "IMAGE"
+    assert state["share"]["media"][0]["media"] == "urn:li:digitalmediaAsset:XYZ"
+    assert post.platform_post_id == "urn:li:share:42"
+
+
 def test_linkedin_falls_back_to_member_prefix_on_422(base_config, monkeypatch):
     """If `urn:li:person:` is rejected as a bad format, retry `urn:li:member:`."""
     authors_tried = []

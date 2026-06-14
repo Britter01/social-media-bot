@@ -175,6 +175,21 @@ def test_select_best_filters_sorts_and_caps(base_config):
     assert topics[0].status == TopicStatus.REJECTED.value
 
 
+def test_select_best_rejects_disabled_platform_topics(base_config):
+    cfg = dataclasses.replace(base_config, disabled_platforms=["youtube"])
+    agent = _agent(cfg)
+    topics = [
+        Topic(title="yt", pillar="Review", platform="youtube", relevance_score=99),
+        Topic(title="ig", pillar="Review", platform="instagram", relevance_score=80),
+    ]
+
+    chosen = agent.select_best(topics)
+
+    # The high-scoring YouTube topic is never surfaced for approval.
+    assert [t.title for t in chosen] == ["ig"]
+    assert topics[0].status == TopicStatus.REJECTED.value
+
+
 # --- research (discovery + persistence, no content) ------------------------
 
 

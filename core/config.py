@@ -224,6 +224,16 @@ class Config:
             env_names = ", ".join(sorted(n.upper() for n in missing))
             raise ConfigError(f"Missing required configuration: {env_names}")
 
+    def enabled_platforms(self) -> list[str]:
+        """Platforms that are not paused via DISABLED_PLATFORMS.
+
+        Unlike :meth:`configured_platforms` this ignores whether credentials
+        are present — it is the set the research/approval pipeline is allowed
+        to create topics for. A platform listed in DISABLED_PLATFORMS is fully
+        switched off: no topics, no content, no posts.
+        """
+        return [p for p in self.platforms if p not in self.disabled_platforms]
+
     def configured_platforms(self) -> list[str]:
         """Return the subset of platforms that have credentials present and are not disabled.
 

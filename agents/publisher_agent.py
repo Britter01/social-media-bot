@@ -438,6 +438,55 @@ class PublisherAgent:
             logger.warning("LinkedIn userinfo lookup failed (%s); using configured URN", exc)
             return None
 
+    def _linkedin_register_and_upload(
+        self, client: httpx.Client, author: str, image_url: str
+    ) -> str | None:
+        """Register an image asset, upload its bytes, and return the asset URN.
+
+        Returns ``None`` if LinkedIn rejects the *owner* URN format, so the
+        caller can retry with the other author prefix. Raises on any other
+        failure. This is the 3-step ugcPosts image flow: registerUpload →
+        PUT the binary to the returned uploadUrl → reference the asset in the
+        post with shareMediaCategory IMAGE.
+        """
+        register = {
+            "registerUploadRequest": {
+                "recipes": ["urn:li:digitalmediaRecipe:feedshare-image"],
+                "owner": author,
+                "serviceRelationships": [
+                    {"relationshipType": "OWNER", "identifier": "urn:li:userGeneratedContent"}
+                ],
+            }
+        }
+        resp = client.post(
+            "https://api.linkedin.com/v2/assets?action=registerUpload",
+            headers={
+                "Authorization": f"Bearer {self._cfg.linkedin_access_token}",
+                "X-Restli-Protocol-Version": "2.0.0",
+                "Content-Type": "application/json",
+            },
+            json=register,
+        )
+        if resp.status_code in (400, 422) and "owner" in resp.text.lower():
+            return None
+        resp.raise_for_status()
+        value = resp.json()["value"]
+        asset = value["asset"]
+        upload_url = value["uploadMechanism"][
+            "com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest"
+        ]["uploadUrl"]
+
+        # Fetch the image from storage and PUT the raw bytes to LinkedIn.
+        img = client.get(image_url)
+        img.raise_for_status()
+        up = client.put(
+            upload_url,
+            headers={"Authorization": f"Bearer {self._cfg.linkedin_access_token}"},
+            content=img.content,
+        )
+        up.raise_for_status()
+        return asset
+
     def _publish_linkedin(self, post: Post) -> str:
         # Uses the classic UGC Posts API (/v2/ugcPosts), not the newer
         # versioned /rest/posts endpoint. /rest/posts requires the gated
@@ -450,6 +499,10 @@ class PublisherAgent:
             "X-Restli-Protocol-Version": "2.0.0",
             "Content-Type": "application/json",
         }
+        has_image = bool(post.thumbnail_url)
+        if has_image:
+            _validate_media_url(post.thumbnail_url, label="thumbnail_url")
+
         with httpx.Client(timeout=60.0) as client:
             # Prefer the id derived from the token. LinkedIn validates the
             # author URN strictly: it must be the real member/person id (and
@@ -471,15 +524,29 @@ class PublisherAgent:
 
             last_resp: httpx.Response | None = None
             for author in candidates:
+                share_content: dict = {
+                    "shareCommentary": {"text": post.caption_with_hashtags[:3000]},
+                    "shareMediaCategory": "NONE",
+                }
+                if has_image:
+                    asset = self._linkedin_register_and_upload(client, author, post.thumbnail_url)
+                    if asset is None:
+                        # Owner URN format rejected — try the next prefix.
+                        logger.warning(
+                            "LinkedIn rejected image owner %r; trying next format", author
+                        )
+                        continue
+                    media_item: dict = {"status": "READY", "media": asset}
+                    title = (post.title or post.topic or "").strip()
+                    if title:
+                        media_item["title"] = {"text": title[:200]}
+                    share_content["shareMediaCategory"] = "IMAGE"
+                    share_content["media"] = [media_item]
+
                 payload: dict = {
                     "author": author,
                     "lifecycleState": "PUBLISHED",
-                    "specificContent": {
-                        "com.linkedin.ugc.ShareContent": {
-                            "shareCommentary": {"text": post.caption_with_hashtags[:3000]},
-                            "shareMediaCategory": "NONE",
-                        }
-                    },
+                    "specificContent": {"com.linkedin.ugc.ShareContent": share_content},
                     "visibility": {"com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC"},
                 }
                 resp = client.post(
@@ -488,6 +555,9 @@ class PublisherAgent:
                     json=payload,
                 )
                 if resp.is_success:
+                    # Log the author URN that worked so the real member id can
+                    # be copied into LINKEDIN_AUTHOR_URN for consistency.
+                    logger.info("LinkedIn published as author %s", author)
                     return resp.headers.get("x-restli-id") or resp.json().get("id", "")
                 last_resp = resp
                 # Only worth trying the next prefix when LinkedIn specifically
