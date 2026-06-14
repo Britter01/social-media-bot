@@ -36,6 +36,7 @@ logger = logging.getLogger("scheduler.cron")
 
 # Platforms that need a video asset before publishing.
 _VIDEO_PLATFORMS = {Platform.YOUTUBE.value, Platform.TIKTOK.value}
+_CAROUSEL_PLATFORMS = frozenset({Platform.INSTAGRAM.value, Platform.FACEBOOK.value})
 
 
 def _round_robin_platforms(pillars: list[str], platforms: list[str]) -> list[tuple]:
@@ -48,6 +49,7 @@ def _round_robin_platforms(pillars: list[str], platforms: list[str]) -> list[tup
 
 def run_content_pipeline() -> None:
     """Generate, enrich, and schedule a batch of posts."""
+    from agents.carousel_agent import CarouselAgent
     from agents.content_agent import ContentAgent
     from agents.quality_agent import QualityAgent, QualityError
     from agents.scheduler_agent import SchedulerAgent
@@ -66,6 +68,7 @@ def run_content_pipeline() -> None:
     thumbnail_agent = _safe_init(ThumbnailAgent, "thumbnail")
     video_agent = _safe_init(VideoAgent, "video")
     quality_agent = _safe_init(QualityAgent, "quality")
+    carousel_agent = _safe_init(CarouselAgent, "carousel")
 
     platforms = config.configured_platforms() or config.platforms
     pairings = _round_robin_platforms(config.content_pillars, platforms)
@@ -79,7 +82,7 @@ def run_content_pipeline() -> None:
             if quality_agent:
                 quality_agent.fix_text(post)
             try:
-                _generate_media(post, thumbnail_agent, video_agent, quality_agent)
+                _apply_media(post, thumbnail_agent, video_agent, quality_agent, carousel_agent)
             except QualityError as exc:
                 logger.warning("QC rejected post %s: %s", post.id, exc)
                 db.update_status(post, PostStatus.FAILED, error=f"QC: {exc}")
@@ -167,6 +170,9 @@ def run_approved_pipeline() -> None:
 def _finalise_posts(posts: list[Post], db, scheduler_agent, *, persist_insert: bool = True) -> int:
     """Add media, pick a slot, and persist each post; return the count scheduled.
 
+    Instagram and Facebook posts are always produced as carousels (see
+    _apply_media).  All other platforms get a single image or video.
+
     Failure-isolated per post — one failing post is marked failed and the
     rest continue. Set persist_insert=False when the posts are already in the
     database (e.g. inserted by generate_for_approved).
@@ -179,21 +185,17 @@ def _finalise_posts(posts: list[Post], db, scheduler_agent, *, persist_insert: b
     thumbnail_agent = _safe_init(ThumbnailAgent, "thumbnail")
     video_agent = _safe_init(VideoAgent, "video")
     quality_agent = _safe_init(QualityAgent, "quality")
+    carousel_agent = _safe_init(CarouselAgent, "carousel")
 
     last_slot: dict[str, datetime] = {}
-
-    carousel_agent = _safe_init(CarouselAgent, "carousel")
-    # Count posts on carousel-eligible platforms so we only create a carousel
-    # every carousel_every_n posts, not for every single post.
-    carousel_counter = 0
-
     scheduled = 0
+
     for post in posts:
         try:
             if quality_agent:
                 quality_agent.fix_text(post)
             try:
-                _generate_media(post, thumbnail_agent, video_agent, quality_agent)
+                _apply_media(post, thumbnail_agent, video_agent, quality_agent, carousel_agent)
             except QualityError as exc:
                 logger.warning("QC rejected post %s: %s", post.id, exc)
                 post.mark(PostStatus.FAILED, error=f"QC: {exc}")
@@ -211,31 +213,6 @@ def _finalise_posts(posts: list[Post], db, scheduler_agent, *, persist_insert: b
                 db.upsert(post)
             scheduled += 1
 
-            if carousel_agent and post.platform in (
-                Platform.INSTAGRAM.value,
-                Platform.FACEBOOK.value,
-            ):
-                carousel_counter += 1
-                if carousel_counter % config.carousel_every_n == 0:
-                    try:
-                        carousel = carousel_agent.create_from_post(
-                            post, quality_agent=quality_agent
-                        )
-                        carousel_after = last_slot.get(post.platform)
-                        scheduler_agent.schedule(carousel, after=carousel_after)
-                        last_slot[post.platform] = carousel.scheduled_time
-                        db.insert(carousel)
-                        scheduled += 1
-                        logger.info(
-                            "Created carousel for post %s (1-in-%d)",
-                            post.id,
-                            config.carousel_every_n,
-                        )
-                    except Exception:
-                        logger.exception(
-                            "Carousel creation failed for post %s; continuing", post.id
-                        )
-
         except Exception:
             logger.exception("Failed finalising post %s", post.id)
             try:
@@ -243,6 +220,43 @@ def _finalise_posts(posts: list[Post], db, scheduler_agent, *, persist_insert: b
             except Exception:
                 logger.exception("Could not persist failure for post %s", post.id)
     return scheduled
+
+
+def _apply_media(post: Post, thumbnail_agent, video_agent, quality_agent, carousel_agent) -> None:
+    """Assign media to *post* in place.
+
+    Instagram and Facebook always get a carousel — see carousel_agent.py for
+    the slide design (cover photo + alternating dark cards / photo strips).
+    If the carousel agent is unavailable or fails, falls back to a single image.
+    All other platforms get a single image or video via _generate_media.
+
+    Raises QualityError (from the single-image path) so callers can handle
+    QC failures the same way regardless of which branch ran.
+    """
+    from agents.quality_agent import QualityError
+
+    if post.platform in _CAROUSEL_PLATFORMS and carousel_agent:
+        try:
+            carousel = carousel_agent.create_from_post(post, quality_agent=quality_agent)
+            if not carousel.slides:
+                raise RuntimeError("carousel returned 0 slides")
+            post.post_type = carousel.post_type
+            post.slides = carousel.slides
+            post.thumbnail_url = carousel.thumbnail_url
+            post.title = carousel.title or post.title
+            post.caption = carousel.caption or post.caption
+            post.mark(PostStatus.MEDIA_READY)
+            return
+        except QualityError:
+            raise  # propagate so the caller can mark the post failed
+        except Exception:
+            logger.exception(
+                "Carousel failed for post %s (%s); falling back to single image",
+                post.id,
+                post.platform,
+            )
+
+    _generate_media(post, thumbnail_agent, video_agent, quality_agent)
 
 
 def _generate_media(post: Post, thumbnail_agent, video_agent, quality_agent=None) -> None:
@@ -612,6 +626,40 @@ def run_cleanup_commands() -> None:
         logger.exception("Cleanup: failed to prune pipeline_commands")
 
 
+def run_weekly_strategy() -> None:
+    """Monday competitor-research pass: queue 7 shaped topic ideas for approval.
+
+    Studies what's working in the niche and (optionally) on competitor accounts
+    set via COMPETITOR_URLS in Railway.  Generates 7 original post ideas shaped
+    by proven viral patterns and drops them into the approval queue — same gate
+    as the daily research pipeline so nothing posts without your sign-off.
+
+    Runs every Monday at 07:00 (after the 05:30 daily research run).
+    """
+    from agents.content_agent import ContentAgent
+    from agents.research_agent import ResearchAgent
+
+    logger.info("=== Weekly strategy pipeline starting ===")
+    try:
+        db = get_database()
+        content_agent = ContentAgent()
+        research_agent = ResearchAgent(content_agent=content_agent, db=db)
+    except Exception:
+        logger.exception("Weekly strategy pipeline could not initialise; skipping")
+        return
+
+    try:
+        topics = research_agent.weekly_strategy(
+            competitor_urls=config.competitor_urls,
+            target_count=7,
+        )
+    except Exception:
+        logger.exception("Weekly strategy research failed; skipping")
+        return
+
+    logger.info("=== Weekly strategy finished: %d topic(s) queued for approval ===", len(topics))
+
+
 def _safe_init(agent_cls, label: str):
     """Instantiate an agent, returning None if it's unconfigured."""
     try:
@@ -700,6 +748,16 @@ def build_scheduler():
         coalesce=True,
         misfire_grace_time=3600,
     )
+
+    scheduler.add_job(
+        run_weekly_strategy,
+        trigger=CronTrigger(day_of_week="mon", hour=7, minute=0, timezone=config.timezone),
+        id="weekly_strategy",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
+
     return scheduler
 
 

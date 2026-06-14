@@ -165,6 +165,13 @@ class Config:
         ]
     )
 
+    # Optional competitor/inspiration account URLs for the weekly strategy run.
+    # Set COMPETITOR_URLS in Railway as a comma-separated list, e.g.:
+    #   https://www.instagram.com/mkbhd/,https://www.youtube.com/@LinusTechTips
+    # The weekly strategy agent visits these, extracts viral patterns, and uses
+    # them to shape post ideas — it never copies content, only patterns.
+    competitor_urls: list[str] = field(default_factory=list)
+
     @classmethod
     def from_env(cls) -> Config:
         """Build a ``Config`` from the current environment."""
@@ -210,6 +217,11 @@ class Config:
                 p.strip().lower()
                 for p in (_get("DISABLED_PLATFORMS") or "").split(",")
                 if p.strip()
+            ],
+            competitor_urls=[
+                u.strip()
+                for u in (_get("COMPETITOR_URLS") or "").split(",")
+                if u.strip().startswith(("http://", "https://"))
             ],
         )
 

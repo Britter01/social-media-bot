@@ -350,6 +350,40 @@ class ResearchAgent:
         logger.info("Generating content for %d approved topic(s)", len(approved))
         return self.generate_content(approved, persist=persist)
 
+    def weekly_strategy(
+        self,
+        competitor_urls: list[str] | None = None,
+        target_count: int = 7,
+    ) -> list[Topic]:
+        """Research competitor patterns and return shaped topic ideas for the week.
+
+        Runs a web search focused on what's working in the niche right now,
+        optionally studying specific competitor accounts set via COMPETITOR_URLS.
+        Returns ``target_count`` original topics dropped into the approval queue
+        — same flow as the daily research pipeline, but driven by virality
+        patterns rather than just trending news.
+
+        All ideas are tailored to the brand voice from the system prompt.
+        Competitors are studied for patterns only — no content is copied.
+        """
+        findings = self._search_competitor_patterns(competitor_urls or [], target_count)
+        if not findings.strip():
+            logger.warning(
+                "Weekly strategy: web search returned no findings; falling back to daily discovery"
+            )
+            return self.discover()
+        topics = self._score_and_decide(findings, self._cfg.research_categories)
+        # Select the top ideas and persist to the approval queue
+        best = self.select_best(topics, limit=target_count)
+        if self._db is not None:
+            for topic in best:
+                try:
+                    self._db.insert_topic(topic)
+                except Exception:
+                    logger.exception("Could not persist weekly strategy topic %s", topic.id)
+        logger.info("Weekly strategy: %d topic(s) queued for approval", len(best))
+        return best
+
     def run(
         self,
         categories: list[str] | None = None,
@@ -514,6 +548,81 @@ class ResearchAgent:
         fallback = (self._cfg.configured_platforms() or sorted(_VALID_PLATFORMS))[0]
         logger.warning("Unknown platform %r; defaulting to %s", value, fallback)
         return fallback
+
+    def _search_competitor_patterns(self, competitor_urls: list[str], target_count: int) -> str:
+        """Elite-strategist web search: viral patterns in the niche + competitor intel.
+
+        The five cross-cutting patterns proven to drive growth in this space are
+        embedded directly as output requirements so every idea inherits them:
+          1. One-line repeatable promise — what the post will deliver, in one sentence
+          2. "Use it now" takeaway — practical action, not just news
+          3. Core asset repurposable across carousel → newsletter → short-form video
+          4. Founder-visible angle — honest, disclosed, trust-building framing
+          5. Consistent tone — warm, clear, confident; the brand voice is the moat
+        """
+        safe_urls = [u for u in competitor_urls if _is_safe_url(u)][:5]
+        url_block = ""
+        if safe_urls:
+            url_block = (
+                "\n\nVisit these reference accounts and study what's performed best recently "
+                "— look for hook structures, format types (carousel, reel, talking-head, "
+                "tutorial), and the exact 'use it now' angle that drives saves and shares. "
+                "Study patterns only; do not copy specific content:\n"
+                + "\n".join(f"- {u}" for u in safe_urls)
+            )
+
+        themes = ", ".join(self._cfg.research_categories)
+        user_prompt = (
+            "You are an elite social media strategist. Your task is to find what is "
+            f"working RIGHT NOW in these niches: {themes}.\n\n"
+            "Search the web for:\n"
+            "• The highest-engagement posts from the last 2 weeks — what made them "
+            "break through? Look for specific headlines, format types, and hook structures.\n"
+            "• Emerging topics with clear rising traction that aren't yet saturated\n"
+            "• Hook patterns that earn saves and shares, not just likes: list-based, "
+            "contrast ('X vs Y'), counterintuitive claim, how-to step-by-step, "
+            "before/after transformation, 'I tried X so you don't have to'\n"
+            "• The emotional driver: curiosity gap, aspiration, fear-of-missing-out, "
+            "surprise, or recognition ('that's exactly my problem')\n"
+            f"{url_block}\n\n"
+            f"Extract exactly {target_count} specific, original post ideas. "
+            "For each idea, include ALL of the following — these are non-negotiable:\n\n"
+            "  ONE-LINE PROMISE: what the audience will walk away with (e.g. "
+            "'You'll know the 3 AI tools saving 5 hours a week for knowledge workers')\n"
+            "  USE IT NOW TAKEAWAY: the immediate, practical action — not just news, "
+            "not just inspiration. What can they do or try within the next 10 minutes?\n"
+            "  HOOK / HEADLINE: the exact opening line or carousel cover headline\n"
+            "  REPURPOSE PATH: how this one idea maps to carousel → reel/short → newsletter\n"
+            "  EMOTIONAL TRIGGER: which emotion drives the share/save, and why\n"
+            "  VIRAL PATTERN: which proven structure it uses (name the pattern)\n"
+            "  SOURCE URLs: where you found the evidence that this topic has traction\n\n"
+            "Be specific. Vague ideas ('AI is changing everything') are worthless. "
+            "Great ideas name the tool, the use case, the person, or the number."
+        )
+
+        base_user = {"role": "user", "content": user_prompt}
+        messages = [base_user]
+        response = None
+
+        for _ in range(_MAX_CONTINUATIONS):
+            try:
+                response = self._client.messages.create(
+                    model=self._cfg.model_fast,
+                    max_tokens=8000,
+                    system=self._system,
+                    tools=[_WEB_SEARCH_TOOL],
+                    messages=messages,
+                )
+            except anthropic.APIError:
+                logger.exception("Weekly strategy web search failed")
+                raise
+
+            if response.stop_reason == "pause_turn":
+                messages = [base_user, {"role": "assistant", "content": response.content}]
+                continue
+            break
+
+        return self._collect_text(response.content) if response else ""
 
     @staticmethod
     def _collect_text(content) -> str:
