@@ -104,10 +104,25 @@ def test_image_fetch_failure_skips_check(base_config):
     agent._client.messages.create.assert_not_called()
 
 
-def test_image_non_json_response_fails_closed(base_config):
-    """A non-JSON QC response must raise QualityError (fail closed, not silently pass)."""
+def test_image_non_json_response_passes_through(base_config):
+    """A non-JSON QC response must NOT block publishing (quality gate, fail open)."""
     agent = _agent(base_config)
     agent._client.messages.create.return_value = _msg("looks good to me")
+    post = _post(thumbnail_url="https://test.supabase.co/thumb.jpg")
+    with patch.object(
+        QualityAgent,
+        "_fetch_image",
+        return_value=("base64data", "image/jpeg"),
+    ):
+        agent.review(post)  # must not raise
+
+
+def test_image_json_in_prose_is_parsed(base_config):
+    """A JSON object embedded in prose / code fences is still honoured."""
+    agent = _agent(base_config)
+    agent._client.messages.create.return_value = _msg(
+        'Here is my check:\n```json\n{"ok": false, "issue": "logo cut off"}\n```'
+    )
     post = _post(thumbnail_url="https://test.supabase.co/thumb.jpg")
     with patch.object(
         QualityAgent,

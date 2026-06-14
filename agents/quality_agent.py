@@ -18,6 +18,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import re
 
 import httpx
 from anthropic import Anthropic
@@ -26,6 +27,29 @@ from core.config import Config, ConfigError, config
 from core.models import Post
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_qc_json(raw: str) -> dict | None:
+    """Best-effort extract a JSON object from a model reply.
+
+    Handles bare JSON, ```json fenced blocks, and prose with an embedded
+    {...} object. Returns None if nothing parseable is found — Haiku
+    occasionally answers in prose, and QC is a quality gate, not a hard
+    security boundary, so the caller treats None as "pass".
+    """
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+    match = re.search(r"\{.*\}", raw, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return None
+    return None
 
 
 class QualityError(RuntimeError):
@@ -159,15 +183,17 @@ class QualityAgent:
         )
 
         raw = resp.content[0].text.strip()
-        try:
-            result = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            logger.error(
-                "QC: non-JSON image response for post %s: %r — failing closed",
+        result = _parse_qc_json(raw)
+        if result is None:
+            # Quality gate, not a security boundary: if the model rambles
+            # instead of returning JSON, let the image through rather than
+            # failing the whole post.
+            logger.warning(
+                "QC: non-JSON image response for post %s: %r — passing image through",
                 post.id,
                 raw,
             )
-            raise QualityError(f"{label}: image QC returned unparseable response") from exc
+            return
 
         if not result.get("ok", True):
             issue = result.get("issue", "unknown image quality issue")

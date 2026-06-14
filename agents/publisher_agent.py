@@ -279,6 +279,34 @@ class PublisherAgent:
 
     # --- Facebook Pages (Graph API) -------------------------------------
 
+    def _facebook_page_token(self, client: httpx.Client) -> str:
+        """Resolve a Page access token for posting *as the page*.
+
+        Facebook rejects Page posts made with a user token ("Unpublished
+        posts must be posted to a page as the page itself"). If
+        FACEBOOK_PAGE_ACCESS_TOKEN is set we use it directly; otherwise we
+        derive one at runtime from the user token via GET /{page-id}. That
+        derivation needs the user token to carry pages_show_list,
+        pages_read_engagement and pages_manage_posts.
+        """
+        if self._cfg.facebook_page_access_token:
+            return self._cfg.facebook_page_access_token
+
+        resp = client.get(
+            f"https://graph.facebook.com/v22.0/{self._cfg.facebook_page_id}",
+            params={"fields": "access_token", "access_token": self._cfg.instagram_access_token},
+        )
+        resp.raise_for_status()
+        page_token = resp.json().get("access_token")
+        if not page_token:
+            raise PublishError(
+                "Could not obtain a Facebook Page access token. The token in "
+                "INSTAGRAM_ACCESS_TOKEN needs pages_show_list, "
+                "pages_read_engagement and pages_manage_posts permissions, or "
+                "set FACEBOOK_PAGE_ACCESS_TOKEN directly."
+            )
+        return page_token
+
     def _publish_facebook(self, post: Post) -> str:
         self._cfg.require("facebook_page_id", "instagram_access_token")
         if post.post_type == "carousel" and post.slides:
@@ -293,10 +321,10 @@ class PublisherAgent:
             raise PublishError("Facebook requires an image (thumbnail_url)")
 
         page_id = self._cfg.facebook_page_id
-        token = self._cfg.instagram_access_token
         base = f"https://graph.facebook.com/v22.0/{page_id}"
 
         with httpx.Client(timeout=60.0) as client:
+            token = self._facebook_page_token(client)
             if post.thumbnail_url:
                 _validate_media_url(post.thumbnail_url, label="thumbnail_url")
                 resp = client.post(
@@ -323,10 +351,10 @@ class PublisherAgent:
         import json as _json
 
         page_id = self._cfg.facebook_page_id
-        token = self._cfg.instagram_access_token
         base = f"https://graph.facebook.com/v22.0/{page_id}"
 
         with httpx.Client(timeout=120.0) as client:
+            token = self._facebook_page_token(client)
             # 1. Upload each slide as an unpublished photo.
             photo_ids = []
             for slide in post.slides:
@@ -390,38 +418,42 @@ class PublisherAgent:
     # --- LinkedIn (UGC Posts) -------------------------------------------
 
     def _publish_linkedin(self, post: Post) -> str:
+        # Uses the classic UGC Posts API (/v2/ugcPosts), not the newer
+        # versioned /rest/posts endpoint. /rest/posts requires the gated
+        # Community Management API product, which consumer-tier apps don't
+        # get — it returns a bare 403. /v2/ugcPosts works with a plain
+        # "Share on LinkedIn" app and the w_member_social scope.
         self._cfg.require("linkedin_access_token", "linkedin_author_urn")
         headers = {
             "Authorization": f"Bearer {self._cfg.linkedin_access_token}",
-            "LinkedIn-Version": "202602",
             "X-Restli-Protocol-Version": "2.0.0",
             "Content-Type": "application/json",
         }
         payload: dict = {
             "author": self._cfg.linkedin_author_urn,
-            "commentary": post.caption_with_hashtags,
-            "visibility": "PUBLIC",
-            "distribution": {
-                "feedDistribution": "MAIN_FEED",
-            },
             "lifecycleState": "PUBLISHED",
-            "isReshareDisabledByAuthor": False,
+            "specificContent": {
+                "com.linkedin.ugc.ShareContent": {
+                    "shareCommentary": {"text": post.caption_with_hashtags[:3000]},
+                    "shareMediaCategory": "NONE",
+                }
+            },
+            "visibility": {"com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC"},
         }
         with httpx.Client(timeout=60.0) as client:
             resp = client.post(
-                "https://api.linkedin.com/rest/posts",
+                "https://api.linkedin.com/v2/ugcPosts",
                 headers=headers,
                 json=payload,
             )
             if not resp.is_success:
                 logger.error(
-                    "LinkedIn %s — headers: %s — body: %s",
+                    "LinkedIn %s — body: %s",
                     resp.status_code,
-                    dict(resp.headers),
                     resp.text[:500],
                 )
             resp.raise_for_status()
-            return resp.headers.get("x-restli-id") or ""
+            return resp.headers.get("x-restli-id") or resp.json().get("id", "")
 
     # --- YouTube (Data API v3) ------------------------------------------
 

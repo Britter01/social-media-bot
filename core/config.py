@@ -90,6 +90,10 @@ class Config:
     instagram_access_token: str | None = None
     instagram_business_account_id: str | None = None
     facebook_page_id: str | None = None
+    # Optional explicit Page access token. If unset, the publisher derives one
+    # at runtime from instagram_access_token. Posting to a Page must be done
+    # "as the page", which requires a Page token — not a user token.
+    facebook_page_access_token: str | None = None
 
     twitter_api_key: str | None = None
     twitter_api_secret: str | None = None
@@ -182,6 +186,7 @@ class Config:
             instagram_access_token=_get("INSTAGRAM_ACCESS_TOKEN"),
             instagram_business_account_id=_get("INSTAGRAM_BUSINESS_ACCOUNT_ID"),
             facebook_page_id=_get("FACEBOOK_PAGE_ID"),
+            facebook_page_access_token=_get("FACEBOOK_PAGE_ACCESS_TOKEN"),
             twitter_api_key=_get("TWITTER_API_KEY"),
             twitter_api_secret=_get("TWITTER_API_SECRET"),
             twitter_access_token=_get("TWITTER_ACCESS_TOKEN"),
