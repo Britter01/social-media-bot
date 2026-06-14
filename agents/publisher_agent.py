@@ -417,43 +417,94 @@ class PublisherAgent:
 
     # --- LinkedIn (UGC Posts) -------------------------------------------
 
+    def _linkedin_member_id(self, client: httpx.Client) -> str | None:
+        """Return the authenticated member's id from the OpenID userinfo endpoint.
+
+        The ``sub`` field is the canonical id for the person who authorised the
+        token. Deriving the author URN from this — rather than trusting a
+        hand-entered LINKEDIN_AUTHOR_URN — means a mistyped/stale value can't
+        silently break publishing. Requires the token to carry the ``openid``
+        (and ``profile``) scope; returns ``None`` if it doesn't so the caller
+        can fall back to the configured URN.
+        """
+        try:
+            resp = client.get(
+                "https://api.linkedin.com/v2/userinfo",
+                headers={"Authorization": f"Bearer {self._cfg.linkedin_access_token}"},
+            )
+            resp.raise_for_status()
+            return resp.json().get("sub") or None
+        except httpx.HTTPError as exc:
+            logger.warning("LinkedIn userinfo lookup failed (%s); using configured URN", exc)
+            return None
+
     def _publish_linkedin(self, post: Post) -> str:
         # Uses the classic UGC Posts API (/v2/ugcPosts), not the newer
         # versioned /rest/posts endpoint. /rest/posts requires the gated
         # Community Management API product, which consumer-tier apps don't
         # get — it returns a bare 403. /v2/ugcPosts works with a plain
         # "Share on LinkedIn" app and the w_member_social scope.
-        self._cfg.require("linkedin_access_token", "linkedin_author_urn")
+        self._cfg.require("linkedin_access_token")
         headers = {
             "Authorization": f"Bearer {self._cfg.linkedin_access_token}",
             "X-Restli-Protocol-Version": "2.0.0",
             "Content-Type": "application/json",
         }
-        payload: dict = {
-            "author": self._cfg.linkedin_author_urn,
-            "lifecycleState": "PUBLISHED",
-            "specificContent": {
-                "com.linkedin.ugc.ShareContent": {
-                    "shareCommentary": {"text": post.caption_with_hashtags[:3000]},
-                    "shareMediaCategory": "NONE",
-                }
-            },
-            "visibility": {"com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC"},
-        }
         with httpx.Client(timeout=60.0) as client:
-            resp = client.post(
-                "https://api.linkedin.com/v2/ugcPosts",
-                headers=headers,
-                json=payload,
-            )
-            if not resp.is_success:
-                logger.error(
-                    "LinkedIn %s — body: %s",
-                    resp.status_code,
-                    resp.text[:500],
+            # Prefer the id derived from the token. LinkedIn validates the
+            # author URN strictly: it must be the real member/person id (and
+            # the prefix it accepts varies — some apps want urn:li:person:,
+            # others urn:li:member:). Try the derived id under both prefixes,
+            # then fall back to whatever is configured.
+            member_id = self._linkedin_member_id(client)
+            if member_id:
+                candidates = [f"urn:li:person:{member_id}", f"urn:li:member:{member_id}"]
+            elif self._cfg.linkedin_author_urn:
+                candidates = [self._cfg.linkedin_author_urn]
+            else:
+                raise PublishError(
+                    "Cannot determine the LinkedIn author URN: the token lacks the "
+                    "'openid'/'profile' scope (so the member id can't be derived) and "
+                    "LINKEDIN_AUTHOR_URN is not set. Regenerate the token with the "
+                    "openid and profile scopes, or set LINKEDIN_AUTHOR_URN."
                 )
-            resp.raise_for_status()
-            return resp.headers.get("x-restli-id") or resp.json().get("id", "")
+
+            last_resp: httpx.Response | None = None
+            for author in candidates:
+                payload: dict = {
+                    "author": author,
+                    "lifecycleState": "PUBLISHED",
+                    "specificContent": {
+                        "com.linkedin.ugc.ShareContent": {
+                            "shareCommentary": {"text": post.caption_with_hashtags[:3000]},
+                            "shareMediaCategory": "NONE",
+                        }
+                    },
+                    "visibility": {"com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC"},
+                }
+                resp = client.post(
+                    "https://api.linkedin.com/v2/ugcPosts",
+                    headers=headers,
+                    json=payload,
+                )
+                if resp.is_success:
+                    return resp.headers.get("x-restli-id") or resp.json().get("id", "")
+                last_resp = resp
+                # Only worth trying the next prefix when LinkedIn specifically
+                # rejected the author format; any other error won't be fixed by
+                # swapping the prefix.
+                if not (resp.status_code == 422 and "author" in resp.text.lower()):
+                    break
+                logger.warning(
+                    "LinkedIn rejected author %r (%s); trying next format",
+                    author,
+                    resp.status_code,
+                )
+
+            assert last_resp is not None  # candidates is never empty
+            logger.error("LinkedIn %s — body: %s", last_resp.status_code, last_resp.text[:500])
+            last_resp.raise_for_status()
+            return ""
 
     # --- YouTube (Data API v3) ------------------------------------------
 

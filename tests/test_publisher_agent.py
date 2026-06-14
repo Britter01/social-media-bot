@@ -123,3 +123,49 @@ def test_linkedin_publish_uses_restli_header(base_config, monkeypatch):
     PublisherAgent(base_config).publish(post)
     assert post.platform_post_id == "urn:li:share:99"
     assert post.status == PostStatus.PUBLISHED.value
+
+
+def test_linkedin_derives_author_from_userinfo(base_config, monkeypatch):
+    """The author URN is built from the token's userinfo `sub`, not config."""
+    captured = {}
+
+    class _LinkedInClient(_FakeClient):
+        def get(self, url, **kwargs):
+            assert url.endswith("/userinfo")
+            return _FakeResponse({"sub": "REALid123"})
+
+        def post(self, url, **kwargs):
+            captured["author"] = kwargs["json"]["author"]
+            return _FakeResponse({}, headers={"x-restli-id": "urn:li:share:7"})
+
+    monkeypatch.setattr(httpx, "Client", _LinkedInClient)
+    post = Post(pillar="Productivity", platform="linkedin", caption="Focus.")
+    PublisherAgent(base_config).publish(post)
+    # Derived from `sub`, ignoring the (different) configured author URN.
+    assert captured["author"] == "urn:li:person:REALid123"
+    assert post.platform_post_id == "urn:li:share:7"
+
+
+def test_linkedin_falls_back_to_member_prefix_on_422(base_config, monkeypatch):
+    """If `urn:li:person:` is rejected as a bad format, retry `urn:li:member:`."""
+    authors_tried = []
+
+    class _LinkedInClient(_FakeClient):
+        def get(self, url, **kwargs):
+            return _FakeResponse({"sub": "999"})
+
+        def post(self, url, **kwargs):
+            author = kwargs["json"]["author"]
+            authors_tried.append(author)
+            if author.startswith("urn:li:person:"):
+                return _FakeResponse(
+                    {"message": "/author does not match urn:li:member:-?\\d+"},
+                    status_code=422,
+                )
+            return _FakeResponse({}, headers={"x-restli-id": "urn:li:share:8"})
+
+    monkeypatch.setattr(httpx, "Client", _LinkedInClient)
+    post = Post(pillar="Productivity", platform="linkedin", caption="Focus.")
+    PublisherAgent(base_config).publish(post)
+    assert authors_tried == ["urn:li:person:999", "urn:li:member:999"]
+    assert post.platform_post_id == "urn:li:share:8"
