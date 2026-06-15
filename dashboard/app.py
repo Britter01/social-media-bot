@@ -156,7 +156,7 @@ components.html(
       font-weight:700 !important; letter-spacing:-0.02em !important;
     }
     #MainMenu, footer { visibility: hidden; }
-    .block-container { padding-top: 3.5rem !important; max-width: 1420px !important; }
+    .block-container { padding-top: 2rem !important; max-width: 1420px !important; }
 
     h1, h2, h3 {
       font-family:'Figtree',sans-serif !important;
@@ -164,12 +164,26 @@ components.html(
       color: var(--charcoal) !important;
     }
 
-    /* ── Hide Streamlit's deploy / manage-app toolbar ── */
+    /* ── Hide Streamlit's deploy / manage-app toolbar (all known selectors) ── */
     [data-testid="stToolbar"],
     [data-testid="stBottom"],
     [data-testid="stStatusWidget"],
+    [data-testid="stDecoration"],
+    [data-testid="stToolbarActions"],
     .stDeployButton,
-    #stDecoration { display: none !important; }
+    #stDecoration,
+    footer,
+    footer * { display: none !important; }
+
+    /* ── Mobile: keep status bar horizontal and make buttons full-width ── */
+    @media (max-width: 768px) {
+      .block-container { padding: 1rem 0.75rem !important; }
+      /* status bar: force horizontal scroll rather than stacking */
+      [data-testid="stHorizontalBlock"] { overflow-x: auto !important; flex-wrap: nowrap !important; }
+      /* post action buttons: stack vertically and stay full width */
+      [data-testid="stHorizontalBlock"] [data-testid="stVerticalBlock"] { min-width: 0 !important; }
+      .stButton > button { min-height: 44px !important; font-size: 14px !important; }
+    }
 
     /* ── Tabs (pill rail) ── */
     .stTabs [data-baseweb="tab-list"] {
@@ -544,21 +558,21 @@ STAGES = [
     ("Failed", len(failed), C_FAILED),
 ]
 
-cols = st.columns(len(STAGES))
-for i, (label, count, color) in enumerate(STAGES):
-    with cols[i]:
-        st.markdown(
-            f"""<div style="background:{OFF_WHITE};border:1px solid {SMOKE};border-radius:14px;
-                            padding:16px 10px;text-align:center">
-              <div style="font-size:34px;font-weight:700;font-family:'Figtree',sans-serif;
-                          color:{color};line-height:1;letter-spacing:-0.02em">{count}</div>
-              <div style="font-size:10px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;
-                          color:{SLATE};margin-top:6px">{label}</div>
-            </div>""",
-            unsafe_allow_html=True,
-        )
-
-st.markdown("<div style='margin-bottom:8px'></div>", unsafe_allow_html=True)
+_stage_cells = "".join(
+    f"""<div style="flex:0 0 auto;min-width:110px;background:{OFF_WHITE};border:1px solid {SMOKE};
+                   border-radius:14px;padding:16px 10px;text-align:center">
+      <div style="font-size:34px;font-weight:700;font-family:'Figtree',sans-serif;
+                  color:{color};line-height:1;letter-spacing:-0.02em">{count}</div>
+      <div style="font-size:10px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;
+                  color:{SLATE};margin-top:6px">{label}</div>
+    </div>"""
+    for label, count, color in STAGES
+)
+st.markdown(
+    f"<div style='display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;margin-bottom:8px'>"
+    f"{_stage_cells}</div>",
+    unsafe_allow_html=True,
+)
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -851,31 +865,28 @@ with tab_scheduled:
                 with st.container(border=True):
                     _post_card(p, _sched_str(p), "scheduled")
                     pid = p.get("id", "")
-                    btn_pub, btn_dis = st.columns(2)
-                    with btn_pub:
-                        if pid and st.button(
-                            "Publish now",
-                            key=f"pub_{pid}",
-                            use_container_width=True,
-                            type="primary",
-                        ):
-                            db.table("posts").update(
-                                {"scheduled_time": datetime.now(UTC).isoformat()}
-                            ).eq("id", pid).execute()
-                            try:
-                                _queue_command("publish", cooldown_key=f"pub_{pid}")
-                                st.success("Queued — publishing within 2 min.")
-                            except RuntimeError as e:
-                                st.warning(str(e))
-                    with btn_dis:
-                        if pid and st.button(
-                            "Dismiss", key=f"dismiss_sched_{pid}", use_container_width=True
-                        ):
-                            db.table("posts").update({"status": "dismissed"}).eq(
-                                "id", pid
-                            ).execute()
-                            st.cache_data.clear()
-                            st.rerun()
+                    if pid and st.button(
+                        "Publish now",
+                        key=f"pub_{pid}",
+                        use_container_width=True,
+                        type="primary",
+                    ):
+                        db.table("posts").update(
+                            {"scheduled_time": datetime.now(UTC).isoformat()}
+                        ).eq("id", pid).execute()
+                        try:
+                            _queue_command("publish", cooldown_key=f"pub_{pid}")
+                            st.success("Queued — publishing within 2 min.")
+                        except RuntimeError as e:
+                            st.warning(str(e))
+                    if pid and st.button(
+                        "Dismiss", key=f"dismiss_sched_{pid}", use_container_width=True
+                    ):
+                        db.table("posts").update({"status": "dismissed"}).eq(
+                            "id", pid
+                        ).execute()
+                        st.cache_data.clear()
+                        st.rerun()
 
 # ── Calendar ──────────────────────────────────────────────────────────────────
 
