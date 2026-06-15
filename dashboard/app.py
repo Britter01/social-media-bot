@@ -217,6 +217,7 @@ components.html(
     .stButton > button[kind="primary"]:hover p,
     .stButton > button[kind="primary"]:hover span { background: var(--charcoal) !important; }
 
+
     /* ── Containers ── */
     [data-testid="stVerticalBlockBorderWrapper"] {
       background: var(--white) !important;
@@ -463,18 +464,27 @@ with st.sidebar:
             except Exception:
                 st.error("Failed to queue command.")
 
-    st.markdown("<div style='margin:6px 0 2px'></div>", unsafe_allow_html=True)
+    st.markdown(
+        f"<div style='border-top:1px solid {SMOKE};margin:10px 0 8px'></div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        "<div style='font-family:Figtree,sans-serif;font-size:10px;font-weight:600;"
+        f"letter-spacing:0.16em;text-transform:uppercase;color:{SILVER};margin-bottom:6px'>"
+        "Quick action</div>",
+        unsafe_allow_html=True,
+    )
 
     # ── Combined shortcut ─────────────────────────────────────────────────
     if st.button(
-        "⚡  Research + Generate",
+        "Research + Generate",
         use_container_width=True,
-        type="primary",
         help=(
             "Runs Competitor Analysis AND generates posts from already-approved topics "
             "in one go. New topics from the research still need your approval before "
             "the next Generate run picks them up."
         ),
+        key="btn_research_generate",
     ):
         try:
             _queue_command("weekly_strategy", cooldown_key="rg_strategy")
