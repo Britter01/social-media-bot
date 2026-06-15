@@ -266,32 +266,7 @@ components.html(
     doc.getElementById('btl-css').textContent = CSS;
   }
 
-  /* ── Auto-refresh countdown badge ───────────────────────────────────── */
-  const existing = doc.getElementById('btl-badge');
-  if (existing) existing.remove();
 
-  const badge = doc.createElement('div');
-  badge.id = 'btl-badge';
-  badge.style.cssText = `
-    position:fixed; bottom:20px; right:20px;
-    background:#FFFFFF; border:1px solid #E8E8ED; border-radius:980px;
-    padding:6px 14px; font-family:'Figtree',sans-serif;
-    font-size:12px; font-weight:500; color:#6E6E73; z-index:9999; cursor:pointer;
-    user-select:none; box-shadow:0 1px 4px rgba(0,0,0,0.06);
-    transition:border-color 0.25s, color 0.25s;
-  `;
-  let secs = 60, paused = false;
-  function tick() {
-    badge.textContent = paused ? '⏸  refresh paused' : '↺  ' + secs + 's';
-    badge.style.borderColor = paused ? '#E8E8ED' : (secs < 10 ? '#0066CC' : '#E8E8ED');
-    badge.style.color = paused ? '#A1A1A6' : (secs < 10 ? '#0066CC' : '#6E6E73');
-  }
-  tick();
-  badge.addEventListener('click', () => { paused = !paused; tick(); });
-  doc.body.appendChild(badge);
-  const t = setInterval(() => {
-    if (!paused) { secs--; tick(); if (secs <= 0) { clearInterval(t); window.parent.location.reload(); } }
-  }, 1000);
 })();
 </script>
 """,
