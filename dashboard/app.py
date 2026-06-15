@@ -882,9 +882,7 @@ with tab_scheduled:
                     if pid and st.button(
                         "Dismiss", key=f"dismiss_sched_{pid}", use_container_width=True
                     ):
-                        db.table("posts").update({"status": "dismissed"}).eq(
-                            "id", pid
-                        ).execute()
+                        db.table("posts").update({"status": "dismissed"}).eq("id", pid).execute()
                         st.cache_data.clear()
                         st.rerun()
 
