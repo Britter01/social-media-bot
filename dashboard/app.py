@@ -1367,24 +1367,23 @@ def _render_analytics_diagnostics():
         "YouTube": bool(os.getenv("YOUTUBE_REFRESH_TOKEN")),
     }
 
-    with st.expander("🔍 Why is there no data yet?", expanded=True):
-        st.markdown(f"**{total}** published posts in total:")
-        st.markdown(f"- ✅ **{len(real)}** have a real platform post ID (these can return metrics)")
-        if dry:
-            st.markdown(
-                f"- ⚠️ **{len(dry)}** are marked `dry-run` — these were **never actually posted "
-                "live**, so no metrics exist for them. This happens when `DRY_RUN` is left on. "
-                "Set `DRY_RUN=false` in your worker's environment variables to publish for real."
-            )
-        if missing:
-            st.markdown(f"- ⚠️ **{len(missing)}** have no platform post ID stored")
-        tok_str = "  ".join(f"{'✅' if v else '❌'} {k}" for k, v in tokens.items())
-        st.markdown(f"**Analytics API tokens** (as seen by this dashboard): {tok_str}")
-        st.caption(
-            "Metrics can only be fetched for posts with a real platform ID *and* a configured "
-            "API token for that platform. If your worker runs as a separate service, its tokens "
-            "may differ from what's shown here."
+    st.markdown(f"**{total}** published posts in total:")
+    st.markdown(f"- ✅ **{len(real)}** have a real platform post ID (these can return metrics)")
+    if dry:
+        st.markdown(
+            f"- ⚠️ **{len(dry)}** are marked `dry-run` — these were **never actually posted "
+            "live**, so no metrics exist for them. This happens when `DRY_RUN` is left on. "
+            "Set `DRY_RUN=false` in your worker's environment variables to publish for real."
         )
+    if missing:
+        st.markdown(f"- ⚠️ **{len(missing)}** have no platform post ID stored")
+    tok_str = "  ".join(f"{'✅' if v else '❌'} {k}" for k, v in tokens.items())
+    st.markdown(f"**Analytics API tokens** (as seen by this dashboard): {tok_str}")
+    st.caption(
+        "Metrics can only be fetched for posts with a real platform ID *and* a configured "
+        "API token for that platform. If your worker runs as a separate service, its tokens "
+        "may differ from what's shown here."
+    )
 
 
 def _render_analytics_fetch_button():

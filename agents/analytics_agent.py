@@ -150,43 +150,94 @@ class AnalyticsAgent:
     # ── Platform fetchers ─────────────────────────────────────────────────────
 
     def _fetch_instagram(self, platform_post_id: str) -> dict | None:
-        """Fetch Instagram media insights via the Graph API."""
+        """Fetch Instagram engagement metrics via the Graph API.
+
+        Two sources are combined for robustness:
+          1. The media node itself (``like_count``, ``comments_count``) — these
+             work with basic permissions and never depend on the insights scope.
+          2. The insights endpoint for ``reach`` (and ``views``/``saved``/
+             ``shares`` where available) — needs ``instagram_manage_insights``.
+
+        Insights metrics changed in 2025: ``impressions`` was deprecated for
+        media (replaced by ``views``) and ``comments_count`` is a node field,
+        not an insight. The Graph API rejects the *whole* insights request if
+        any single metric is invalid, so we try progressively smaller metric
+        sets and keep whatever the first successful call returns. Even if every
+        insights call fails, the like/comment counts from step 1 are still
+        returned — so something always shows up.
+        """
         token = self._cfg.instagram_access_token
         if not token:
             logger.debug("Instagram access token not set; skipping")
             return None
+
+        metrics: dict[str, Any] = {}
+        raw: dict[str, Any] = {}
+
+        # 1. Basic counts from the media node (reliable, minimal permissions).
         try:
-            resp = requests.get(
-                f"{_GRAPH_BASE}/{platform_post_id}/insights",
+            node = requests.get(
+                f"{_GRAPH_BASE}/{platform_post_id}",
                 params={
-                    "metric": "reach,impressions,likes,saved,comments_count",
-                    "period": "lifetime",
+                    "fields": "like_count,comments_count,media_type",
                     "access_token": token,
                 },
                 timeout=_REQUEST_TIMEOUT,
             )
-            resp.raise_for_status()
+            node.raise_for_status()
+            ndata = node.json()
+            raw["node"] = ndata
+            metrics["likes"] = _int(ndata.get("like_count"))
+            metrics["comments"] = _int(ndata.get("comments_count"))
+        except Exception as exc:
+            logger.warning(
+                "Instagram media-node fetch failed for %s: %s", platform_post_id[:12], exc
+            )
+
+        # 2. Insights — try richest valid set first, fall back on rejection.
+        for metric_set in ("reach,views,saved,shares", "reach,saved", "reach"):
+            try:
+                resp = requests.get(
+                    f"{_GRAPH_BASE}/{platform_post_id}/insights",
+                    params={"metric": metric_set, "access_token": token},
+                    timeout=_REQUEST_TIMEOUT,
+                )
+                resp.raise_for_status()
+            except Exception as exc:
+                logger.warning(
+                    "Instagram insights [%s] failed for %s: %s",
+                    metric_set,
+                    platform_post_id[:12],
+                    exc,
+                )
+                continue
             data = resp.json()
-            raw = data.get("data", [])
-            metrics: dict[str, Any] = {"raw_data": data}
-            for item in raw:
+            raw["insights"] = data
+            for item in data.get("data", []):
                 name = item.get("name", "")
                 values = item.get("values") or []
                 val = values[0].get("value") if values else item.get("value")
                 if name == "reach":
                     metrics["reach"] = _int(val)
-                elif name == "impressions":
+                elif name == "views":
                     metrics["impressions"] = _int(val)
-                elif name == "likes":
-                    metrics["likes"] = _int(val)
                 elif name == "saved":
                     metrics["saves"] = _int(val)
-                elif name == "comments_count":
-                    metrics["comments"] = _int(val)
-            return metrics
-        except Exception:
-            logger.exception("Instagram analytics fetch failed for %s", platform_post_id[:12])
+                elif name == "shares":
+                    metrics["shares"] = _int(val)
+            break  # first successful call wins
+
+        metrics["raw_data"] = raw
+        # Only treat as "no data" if literally nothing came back.
+        meaningful = ("reach", "impressions", "likes", "comments", "saves", "shares")
+        if not any(metrics.get(k) is not None for k in meaningful):
+            logger.warning(
+                "Instagram: no metrics retrievable for %s (token may lack "
+                "instagram_manage_insights, or the id isn't a media id)",
+                platform_post_id[:12],
+            )
             return None
+        return metrics
 
     def _fetch_facebook(self, platform_post_id: str) -> dict | None:
         """Fetch Facebook post insights via the Graph API."""

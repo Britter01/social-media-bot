@@ -269,7 +269,9 @@ class Database:
         """Return all published posts that have no analytics row at all.
 
         Used for the backfill pass so posts that slipped through the narrow
-        time windows are still captured on a manual fetch.
+        time windows are still captured on a manual fetch. Posts with a
+        'dry-run' platform_post_id are excluded — they were never actually
+        posted live and will never have real metrics.
         """
         try:
             resp = (
@@ -277,6 +279,7 @@ class Database:
                 .select("id, platform, platform_post_id, published_time, title, pillar")
                 .eq("status", "published")
                 .not_.is_("platform_post_id", "null")
+                .neq("platform_post_id", "dry-run")
                 .execute()
             )
             candidates = resp.data or []
