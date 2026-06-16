@@ -282,49 +282,99 @@ class AnalyticsAgent:
         return metrics
 
     def _fetch_facebook(self, platform_post_id: str) -> dict | None:
-        """Fetch Facebook post insights via the Graph API."""
+        """Fetch Facebook post engagement via the Graph API.
+
+        Two sources are combined for robustness (mirroring the Instagram path):
+          1. The post node itself — ``reactions.summary``, ``comments.summary``
+             and ``shares``. These are plain fields, not insights metrics, so
+             they work with ``pages_read_engagement`` and never trip the
+             "(#100) must be a valid insights metric" error.
+          2. The insights endpoint for ``post_impressions`` — best-effort, with
+             progressive fallback. Insights metric names change often and the
+             Graph API rejects the *whole* request if any single metric is
+             invalid, so a failure here never discards the node counts.
+        """
         token = self._cfg.facebook_page_access_token or self._cfg.instagram_access_token
         if not token:
             self._last_error = "Facebook: no access token (set FACEBOOK_PAGE_ACCESS_TOKEN)"
             logger.debug("Facebook/Instagram access token not set; skipping")
             return None
+
+        metrics: dict[str, Any] = {}
+        raw: dict[str, Any] = {}
+
+        # 1. Engagement counts from the post node (reliable, no insights scope).
         try:
-            resp = requests.get(
-                f"{_GRAPH_BASE}/{platform_post_id}/insights",
+            node = requests.get(
+                f"{_GRAPH_BASE}/{platform_post_id}",
                 params={
-                    "metric": "post_impressions,post_reactions_by_type_total",
-                    "period": "lifetime",
+                    "fields": "reactions.summary(total_count).limit(0),"
+                    "comments.summary(total_count).limit(0),shares",
                     "access_token": token,
                 },
                 timeout=_REQUEST_TIMEOUT,
             )
-            resp.raise_for_status()
+            node.raise_for_status()
+            ndata = node.json()
+            raw["node"] = ndata
+            reactions = (ndata.get("reactions") or {}).get("summary") or {}
+            comments = (ndata.get("comments") or {}).get("summary") or {}
+            shares = ndata.get("shares") or {}
+            metrics["likes"] = _int(reactions.get("total_count"))
+            metrics["comments"] = _int(comments.get("total_count"))
+            metrics["shares"] = _int(shares.get("count"))
+        except Exception as exc:
+            self._last_error = f"Facebook node read: {_graph_error(exc)}"
+            logger.warning("Facebook node fetch failed for %s: %s", platform_post_id[:12], exc)
+
+        # 2. Insights — impressions only, best-effort with fallback.
+        insights_err: str | None = None
+        for metric_set in ("post_impressions_unique,post_impressions", "post_impressions"):
+            try:
+                resp = requests.get(
+                    f"{_GRAPH_BASE}/{platform_post_id}/insights",
+                    params={
+                        "metric": metric_set,
+                        "period": "lifetime",
+                        "access_token": token,
+                    },
+                    timeout=_REQUEST_TIMEOUT,
+                )
+                resp.raise_for_status()
+            except Exception as exc:
+                insights_err = f"Facebook insights: {_graph_error(exc)}"
+                logger.warning(
+                    "Facebook insights [%s] failed for %s: %s",
+                    metric_set,
+                    platform_post_id[:12],
+                    exc,
+                )
+                continue
             data = resp.json()
-            raw = data.get("data", [])
-            metrics: dict[str, Any] = {"raw_data": data}
-            for item in raw:
+            raw["insights"] = data
+            insights_err = None
+            for item in data.get("data", []):
                 name = item.get("name", "")
                 values = item.get("values") or []
                 val = values[0].get("value") if values else item.get("value")
                 if name == "post_impressions":
                     metrics["impressions"] = _int(val)
-                elif name == "post_reactions_by_type_total":
-                    if isinstance(val, dict):
-                        metrics["likes"] = _int(sum(val.values()))
-                    else:
-                        metrics["likes"] = _int(val)
-            meaningful = ("impressions", "likes")
-            if not any(metrics.get(k) is not None for k in meaningful):
-                self._last_error = (
-                    "Facebook: insights returned no data "
-                    "(check FACEBOOK_PAGE_ACCESS_TOKEN has pages_read_engagement permission)"
+                elif name == "post_impressions_unique":
+                    metrics["reach"] = _int(val)
+            break  # first successful call wins
+
+        metrics["raw_data"] = raw
+        meaningful = ("impressions", "reach", "likes", "comments", "shares")
+        if not any(metrics.get(k) is not None for k in meaningful):
+            if not self._last_error:
+                self._last_error = insights_err or (
+                    "Facebook returned no metrics (check the token has "
+                    "pages_read_engagement and the id is a real page-post id)"
                 )
-                return None
-            return metrics
-        except Exception as exc:
-            self._last_error = f"Facebook: {_graph_error(exc)}"
-            logger.exception("Facebook analytics fetch failed for %s", platform_post_id[:12])
             return None
+        # Got at least node-level engagement — clear any insights-only error.
+        self._last_error = None
+        return metrics
 
     def _fetch_linkedin(self, platform_post_id: str) -> dict | None:
         """Fetch LinkedIn share statistics."""
