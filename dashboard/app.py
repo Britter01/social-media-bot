@@ -422,54 +422,37 @@ components.html(
   }, 120);
   wire();
 
-  /* ── Pin image fullscreen buttons inside their image corner ─────────────
-     Streamlit renders StyledFullScreenButton as a SIBLING (not a child) of
-     the image element, positioned relative to a large ancestor, which makes
-     it float above/outside the image.  We move each button into the nearest
-     img element's wrapper so it anchors to the image's own top-right corner.
-     Re-runs on a MutationObserver so it survives Streamlit reruns. */
+  /* ── Pin the image toolbar (fullscreen button) inside the image corner ──────
+     Streamlit wraps each image in:
+       stFullScreenFrame > div.e1plw2qp2 > [ stElementToolbar, stImage ]
+     The wrapper div has no position:relative, so stElementToolbar's
+     position:absolute bubbles all the way up to stMain and the button lands
+     at the page/tab-bar level.  We relocate stElementToolbar into stImage
+     (which we make position:relative) so it anchors to the image's top-right
+     corner.  Runs on a MutationObserver + short polling timer to survive
+     Streamlit reruns and hover-lazy rendering. */
   function pinFullscreenBtns() {
-    /* Match the fullscreen button across Streamlit versions: by test-id, by
-       title ("View fullscreen" / "Exit fullscreen"), or by aria-label. */
-    const sel = [
-      '[data-testid="StyledFullScreenButton"]',
-      '[data-testid="stFullScreenButton"]',
-      'button[title*="fullscreen" i]',
-      'button[title*="full screen" i]',
-      'button[aria-label*="fullscreen" i]',
-    ].join(',');
-    doc.querySelectorAll(sel).forEach(function(btn) {
-      /* Find the nearest ancestor that also contains an <img>. */
-      let el = btn.parentElement;
-      let img = null;
-      while (el && el !== doc.body) {
-        const found = el.querySelector('img');
-        if (found) { img = found; break; }
-        el = el.parentElement;
+    doc.querySelectorAll('[data-testid="stFullScreenFrame"]').forEach(function(frame) {
+      const toolbar = frame.querySelector('[data-testid="stElementToolbar"]');
+      const imgEl   = frame.querySelector('[data-testid="stImage"]');
+      if (!toolbar || !imgEl) return;
+      /* Move toolbar inside the image element (once — guard with a flag). */
+      if (!imgEl.contains(toolbar)) {
+        imgEl.style.setProperty('position', 'relative', 'important');
+        imgEl.appendChild(toolbar);
       }
-      if (!img) return;
-      /* Move the button to be a direct child of the image's own wrapper so it
-         anchors to the image (not some larger ancestor). Only move once. */
-      const wrap = img.parentElement;
-      if (wrap) {
-        wrap.style.setProperty('position', 'relative', 'important');
-        if (btn.parentElement !== wrap) wrap.appendChild(btn);
-      }
-      /* Re-apply position every pass — Streamlit may reset it on rerun. */
-      btn.style.setProperty('position', 'absolute', 'important');
-      btn.style.setProperty('top', '0.5rem', 'important');
-      btn.style.setProperty('right', '0.5rem', 'important');
-      btn.style.setProperty('bottom', 'auto', 'important');
-      btn.style.setProperty('left', 'auto', 'important');
-      btn.style.setProperty('margin', '0', 'important');
-      btn.style.setProperty('transform', 'none', 'important');
-      btn.style.setProperty('z-index', '10', 'important');
+      /* Re-apply every pass so Streamlit inline-style resets don't win. */
+      imgEl.style.setProperty('position', 'relative', 'important');
+      toolbar.style.setProperty('position', 'absolute', 'important');
+      toolbar.style.setProperty('top',    '0.5rem', 'important');
+      toolbar.style.setProperty('right',  '0.5rem', 'important');
+      toolbar.style.setProperty('bottom', 'auto',   'important');
+      toolbar.style.setProperty('left',   'auto',   'important');
+      toolbar.style.setProperty('z-index','10',     'important');
     });
   }
 
   pinFullscreenBtns();
-  /* Run for a few seconds on a timer (initial async render) AND on every
-     subsequent DOM mutation (reruns, hover-revealed buttons). */
   let pinTries = 0;
   const pinIv = setInterval(() => {
     pinFullscreenBtns();
