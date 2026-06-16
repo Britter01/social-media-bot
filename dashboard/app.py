@@ -326,18 +326,6 @@ components.html(
     [data-baseweb="option"] { background: var(--white) !important; color: var(--charcoal) !important; }
     [data-baseweb="option"]:hover { background: var(--off-white) !important; }
 
-    /* ── Image enlarge (fullscreen) button ──
-       By default Streamlit floats the expand button above the image's top edge.
-       Pin it inside the image's own top-right corner instead. */
-    [data-testid="stImage"],
-    [data-testid="stImageContainer"] { position: relative !important; }
-    [data-testid="StyledFullScreenButton"] {
-      position: absolute !important;
-      top: 0.5rem !important;
-      right: 0.5rem !important;
-      bottom: auto !important;
-      left: auto !important;
-    }
 
     /* ── Text ── */
     [data-testid="stMarkdownContainer"] p { color: var(--charcoal) !important; }
@@ -433,6 +421,44 @@ components.html(
     if ((scrollDone && tabDone) || ++tries > 25) clearInterval(iv);
   }, 120);
   wire();
+
+  /* ── Pin image fullscreen buttons inside their image corner ─────────────
+     Streamlit renders StyledFullScreenButton as a SIBLING (not a child) of
+     the image element, positioned relative to a large ancestor, which makes
+     it float above/outside the image.  We move each button into the nearest
+     img element's wrapper so it anchors to the image's own top-right corner.
+     Re-runs on a MutationObserver so it survives Streamlit reruns. */
+  function pinFullscreenBtns() {
+    doc.querySelectorAll('[data-testid="StyledFullScreenButton"]').forEach(function(btn) {
+      if (btn.dataset.btlPinned) return;
+      /* Walk up to find the wrapper that also contains an <img> */
+      let el = btn.parentElement;
+      while (el && el !== doc.body) {
+        const img = el.querySelector('img');
+        if (img) {
+          /* Move the button inside the img's direct parent so it's contained */
+          const wrap = img.parentElement;
+          if (wrap && !wrap.contains(btn)) {
+            wrap.style.position = 'relative';
+            wrap.appendChild(btn);
+          }
+          btn.style.setProperty('position', 'absolute', 'important');
+          btn.style.setProperty('top', '0.5rem', 'important');
+          btn.style.setProperty('right', '0.5rem', 'important');
+          btn.style.setProperty('bottom', 'auto', 'important');
+          btn.style.setProperty('left', 'auto', 'important');
+          btn.style.setProperty('z-index', '10', 'important');
+          btn.dataset.btlPinned = '1';
+          break;
+        }
+        el = el.parentElement;
+      }
+    });
+  }
+
+  pinFullscreenBtns();
+  const mo = new MutationObserver(pinFullscreenBtns);
+  mo.observe(doc.body, { childList: true, subtree: true });
 
 })();
 </script>
