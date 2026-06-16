@@ -176,11 +176,19 @@ components.html(
     footer,
     footer * { display: none !important; }
 
-    /* ── Sidebar reopen control — keep it visible & brand-styled so the
-          sidebar can always be brought back after it is collapsed ── */
+    /* ── Sidebar open/close toggle — keep visible across all Streamlit versions ──
+         Streamlit 1.35+ uses stSidebarNavCollapseButton for the chevron shown
+         when the sidebar is open, and stSidebarCollapsedControl / collapsedControl
+         for the button shown when the sidebar is closed.  All must be explicitly
+         un-hidden because our toolbar display:none rule can bleed into them. */
+    [data-testid="stSidebarCollapsedControl"],
+    [data-testid="collapsedControl"],
+    [data-testid="stSidebarNavCollapseButton"],
+    [data-testid="stSidebarNavCollapseButton"] button {
+      display: flex !important; visibility: visible !important; opacity: 1 !important;
+    }
     [data-testid="stSidebarCollapsedControl"],
     [data-testid="collapsedControl"] {
-      display: flex !important; visibility: visible !important; opacity: 1 !important;
       z-index: 1000000 !important; top: 0.55rem !important; left: 0.55rem !important;
     }
     [data-testid="stSidebarCollapsedControl"] button,
@@ -194,7 +202,8 @@ components.html(
       border-color: var(--charcoal) !important; background: var(--off-white) !important;
     }
     [data-testid="stSidebarCollapsedControl"] svg,
-    [data-testid="collapsedControl"] svg {
+    [data-testid="collapsedControl"] svg,
+    [data-testid="stSidebarNavCollapseButton"] svg {
       color: var(--charcoal) !important; fill: var(--charcoal) !important;
     }
 
@@ -327,6 +336,27 @@ components.html(
     [data-baseweb="option"]:hover { background: var(--off-white) !important; }
 
 
+    /* ── Image fullscreen toolbar ──
+       DOM (confirmed via inspector):
+         stFullScreenFrame > div.e1plw2qp2 > [stElementToolbar, stImage]
+       The wrapper div has no position:relative so stElementToolbar's
+       position:absolute resolves against a high ancestor (stMain), putting
+       it near the tab bar.  Make stFullScreenFrame the containing block and
+       pin the toolbar to its top-right corner. */
+    [data-testid="stFullScreenFrame"] {
+      position: relative !important;
+      overflow: visible !important;
+    }
+    [data-testid="stElementToolbar"] {
+      position: absolute !important;
+      top: 0.5rem !important;
+      right: 0.5rem !important;
+      bottom: auto !important;
+      left: auto !important;
+      z-index: 10 !important;
+      width: auto !important;
+    }
+
     /* ── Text ── */
     [data-testid="stMarkdownContainer"] p { color: var(--charcoal) !important; }
     [data-testid="stCaptionContainer"] { color: var(--slate) !important; }
@@ -422,44 +452,6 @@ components.html(
   }, 120);
   wire();
 
-  /* ── Pin the image toolbar (fullscreen button) inside the image corner ──────
-     Streamlit wraps each image in:
-       stFullScreenFrame > div.e1plw2qp2 > [ stElementToolbar, stImage ]
-     The wrapper div has no position:relative, so stElementToolbar's
-     position:absolute bubbles all the way up to stMain and the button lands
-     at the page/tab-bar level.  We relocate stElementToolbar into stImage
-     (which we make position:relative) so it anchors to the image's top-right
-     corner.  Runs on a MutationObserver + short polling timer to survive
-     Streamlit reruns and hover-lazy rendering. */
-  function pinFullscreenBtns() {
-    doc.querySelectorAll('[data-testid="stFullScreenFrame"]').forEach(function(frame) {
-      const toolbar = frame.querySelector('[data-testid="stElementToolbar"]');
-      const imgEl   = frame.querySelector('[data-testid="stImage"]');
-      if (!toolbar || !imgEl) return;
-      /* Move toolbar inside the image element (once — guard with a flag). */
-      if (!imgEl.contains(toolbar)) {
-        imgEl.style.setProperty('position', 'relative', 'important');
-        imgEl.appendChild(toolbar);
-      }
-      /* Re-apply every pass so Streamlit inline-style resets don't win. */
-      imgEl.style.setProperty('position', 'relative', 'important');
-      toolbar.style.setProperty('position', 'absolute', 'important');
-      toolbar.style.setProperty('top',    '0.5rem', 'important');
-      toolbar.style.setProperty('right',  '0.5rem', 'important');
-      toolbar.style.setProperty('bottom', 'auto',   'important');
-      toolbar.style.setProperty('left',   'auto',   'important');
-      toolbar.style.setProperty('z-index','10',     'important');
-    });
-  }
-
-  pinFullscreenBtns();
-  let pinTries = 0;
-  const pinIv = setInterval(() => {
-    pinFullscreenBtns();
-    if (++pinTries > 40) clearInterval(pinIv);
-  }, 150);
-  const mo = new MutationObserver(pinFullscreenBtns);
-  mo.observe(doc.body, { childList: true, subtree: true });
 
 })();
 </script>
@@ -1230,8 +1222,13 @@ with tab_published:
     if not published:
         st.info("Nothing published yet — posts will appear here once live.")
     else:
+        pub_sorted = sorted(
+            published,
+            key=lambda p: p.get("published_time") or p.get("scheduled_time") or "",
+            reverse=True,
+        )
         cols = st.columns(3)
-        for i, post in enumerate(published):
+        for i, post in enumerate(pub_sorted):
             with cols[i % 3]:
                 with st.container(border=True):
                     _post_card(post, _sched_str(post), "published")
