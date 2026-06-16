@@ -176,22 +176,27 @@ components.html(
     footer,
     footer * { display: none !important; }
 
-    /* ── Force sidebar always visible ──────────────────────────────────────
-         Streamlit hides the sidebar by applying transform:translateX(-Npx).
-         Overriding that keeps it on-screen regardless of collapse state or
-         session storage.  We also remove the collapse button so users don't
-         accidentally hide the sidebar again. */
-    [data-testid="stSidebar"] {
-      transform: none !important;
-      min-width: 244px !important;
-      visibility: visible !important;
-      display: flex !important;
+    /* ── Sidebar: always visible on desktop, hidden on mobile ───────────────
+         On desktop (≥768px) we override the transform Streamlit uses to slide
+         the sidebar off-screen so it stays locked open.  On mobile the sidebar
+         is hidden entirely — the "Pipeline controls" expander in the main body
+         provides the same buttons on small screens. */
+    @media (min-width: 768px) {
+      [data-testid="stSidebar"] {
+        transform: none !important;
+        min-width: 244px !important;
+        visibility: visible !important;
+        display: flex !important;
+      }
+      /* Hide the collapse button — sidebar is always open on desktop */
+      [data-testid="stSidebarCollapseButton"],
+      [data-testid="stSidebarCollapsedControl"],
+      [data-testid="collapsedControl"],
+      [data-testid="stExpandSidebarButton"] { display: none !important; }
     }
-    /* Hide the collapse button — sidebar is always open */
-    [data-testid="stSidebarCollapseButton"],
-    [data-testid="stSidebarCollapsedControl"],
-    [data-testid="collapsedControl"],
-    [data-testid="stExpandSidebarButton"] { display: none !important; }
+    @media (max-width: 767px) {
+      [data-testid="stSidebar"] { display: none !important; }
+    }
 
     /* ── Mobile tweaks (do NOT touch column wrapping — Streamlit needs it
           to stack columns vertically on small screens) ── */
