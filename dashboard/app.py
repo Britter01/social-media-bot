@@ -176,47 +176,22 @@ components.html(
     footer,
     footer * { display: none !important; }
 
-    /* ── Sidebar open/close toggle — keep visible across all Streamlit versions ──
-         Test-ids have churned between releases, so target every known variant:
-           • stSidebarCollapseButton  — collapse chevron inside the OPEN sidebar
-           • stExpandSidebarButton    — expand button shown when CLOSED (1.4x)
-           • stSidebarCollapsedControl / collapsedControl — older closed-state btn
-         All forced visible because our toolbar display:none rule can bleed in,
-         and the header is given height + z-index so the button can't be clipped. */
-    [data-testid="stHeader"] { min-height: 2.875rem !important; z-index: 999990 !important; }
+    /* ── Force sidebar always visible ──────────────────────────────────────
+         Streamlit hides the sidebar by applying transform:translateX(-Npx).
+         Overriding that keeps it on-screen regardless of collapse state or
+         session storage.  We also remove the collapse button so users don't
+         accidentally hide the sidebar again. */
+    [data-testid="stSidebar"] {
+      transform: none !important;
+      min-width: 244px !important;
+      visibility: visible !important;
+      display: flex !important;
+    }
+    /* Hide the collapse button — sidebar is always open */
     [data-testid="stSidebarCollapseButton"],
-    [data-testid="stSidebarCollapseButton"] button,
-    [data-testid="stExpandSidebarButton"],
-    [data-testid="stExpandSidebarButton"] button,
     [data-testid="stSidebarCollapsedControl"],
-    [data-testid="collapsedControl"] {
-      display: flex !important; visibility: visible !important; opacity: 1 !important;
-    }
-    [data-testid="stExpandSidebarButton"],
-    [data-testid="stSidebarCollapsedControl"],
-    [data-testid="collapsedControl"] {
-      z-index: 1000000 !important; top: 0.55rem !important; left: 0.55rem !important;
-    }
-    [data-testid="stSidebarCollapseButton"] button,
-    [data-testid="stExpandSidebarButton"] button,
-    [data-testid="stSidebarCollapsedControl"] button,
-    [data-testid="collapsedControl"] button {
-      background: var(--white) !important; border: 1px solid var(--smoke) !important;
-      border-radius: 980px !important; color: var(--charcoal) !important;
-      box-shadow: 0 1px 4px rgba(0,0,0,0.08) !important;
-    }
-    [data-testid="stSidebarCollapseButton"] button:hover,
-    [data-testid="stExpandSidebarButton"] button:hover,
-    [data-testid="stSidebarCollapsedControl"] button:hover,
-    [data-testid="collapsedControl"] button:hover {
-      border-color: var(--charcoal) !important; background: var(--off-white) !important;
-    }
-    [data-testid="stSidebarCollapseButton"] svg,
-    [data-testid="stExpandSidebarButton"] svg,
-    [data-testid="stSidebarCollapsedControl"] svg,
-    [data-testid="collapsedControl"] svg {
-      color: var(--charcoal) !important; fill: var(--charcoal) !important;
-    }
+    [data-testid="collapsedControl"],
+    [data-testid="stExpandSidebarButton"] { display: none !important; }
 
     /* ── Mobile tweaks (do NOT touch column wrapping — Streamlit needs it
           to stack columns vertically on small screens) ── */
@@ -703,13 +678,16 @@ st.markdown(
 <div style="background:{OFF_WHITE};border:1px solid {SMOKE};border-radius:18px;
             padding:20px 30px;margin-bottom:16px;
             display:flex;align-items:center;justify-content:space-between">
-  <div>
-    <div style="font-family:'Figtree',sans-serif;font-size:11px;
-                font-weight:600;letter-spacing:0.18em;text-transform:uppercase;
-                color:{ACCENT};margin-bottom:6px">Content Pipeline</div>
-    <div style="font-family:'Figtree',sans-serif;font-size:28px;
-                font-weight:700;letter-spacing:-0.02em;color:{CHARCOAL};line-height:1.05">
-      Everything that goes out, in one place.
+  <div style="display:flex;align-items:center;gap:20px">
+    {_logo_html(56)}
+    <div>
+      <div style="font-family:'Figtree',sans-serif;font-size:11px;
+                  font-weight:600;letter-spacing:0.18em;text-transform:uppercase;
+                  color:{ACCENT};margin-bottom:6px">Content Pipeline</div>
+      <div style="font-family:'Figtree',sans-serif;font-size:28px;
+                  font-weight:700;letter-spacing:-0.02em;color:{CHARCOAL};line-height:1.05">
+        Everything that goes out, in one place.
+      </div>
     </div>
   </div>
   <div style="text-align:right">
