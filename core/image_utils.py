@@ -115,6 +115,38 @@ def _wrap_text(draw, text: str, font, max_width: int) -> list[str]:
     return lines or [""]
 
 
+def _fit_lines(
+    draw,
+    text: str,
+    path: str,
+    base_size: int,
+    min_size: int,
+    max_width: int,
+    max_lines: int | None = None,
+):
+    """Wrap *text* and shrink the font until it fits within *max_lines*.
+
+    Returns ``(font, lines, size)``. The font is shrunk (never below
+    *min_size*) until the wrapped text needs no more than *max_lines* lines, so
+    headlines and body copy always fit the card instead of running off the
+    edge. If it still overflows at *min_size*, the surplus is trimmed and the
+    last visible line gets an ellipsis rather than being silently cut by the
+    image border.
+    """
+    size = max(min_size, base_size)
+    font = _load_font(path, size)
+    lines = _wrap_text(draw, text, font, max_width)
+    while max_lines is not None and len(lines) > max_lines and size > min_size:
+        size = max(min_size, size - 2)
+        font = _load_font(path, size)
+        lines = _wrap_text(draw, text, font, max_width)
+    if max_lines is not None and len(lines) > max_lines:
+        lines = lines[:max_lines]
+        last = lines[-1].rstrip()
+        lines[-1] = (last[:-1] if last.endswith("…") else last) + "…"
+    return font, lines, size
+
+
 def _crop_hallucinated_bars(img):
     """Detect and remove solid-colour header/footer bars hallucinated by Imagen.
 
@@ -220,12 +252,19 @@ def add_brand_overlay(
     tagline: str = "",
     bar_opacity: int = 255,
     dark_logo: bool = False,
+    corner: str | None = None,
 ) -> bytes:
     """Composite the brand logo PNG onto *image_bytes*.
 
     Scales the logo to ~15% of the image width, places it in whichever corner
     has the least visual activity, then auto-selects white or black logo based
     on the brightness of that corner region.
+
+    Pass ``corner`` (one of "top_right", "top_left", "bottom_right",
+    "bottom_left") to force a fixed placement instead of auto-detection. The
+    carousel renderer uses this so the logo never lands on top of the slide
+    text, whose position is known in advance. The white/black logo colour is
+    still chosen automatically from the chosen corner's brightness.
 
     Returns PNG bytes with the logo applied.  If Pillow is unavailable or the
     logo file is missing, the original bytes are returned unchanged.
@@ -257,7 +296,16 @@ def add_brand_overlay(
     target_w = int(max(_LOGO_MIN_WIDTH, min(_LOGO_MAX_WIDTH, width * _LOGO_WIDTH_RATIO)))
     target_h = int(logo_cropped_ref.height * target_w / logo_cropped_ref.width)
 
-    paste_x, paste_y = _quietest_corner(img, target_w, target_h, _PAD)
+    if corner in {"top_right", "top_left", "bottom_right", "bottom_left"}:
+        fixed = {
+            "top_right": (width - target_w - _PAD, _PAD),
+            "top_left": (_PAD, _PAD),
+            "bottom_right": (width - target_w - _PAD, height - target_h - _PAD),
+            "bottom_left": (_PAD, height - target_h - _PAD),
+        }
+        paste_x, paste_y = fixed[corner]
+    else:
+        paste_x, paste_y = _quietest_corner(img, target_w, target_h, _PAD)
 
     light_bg = _corner_is_light(img, paste_x, paste_y, target_w, target_h)
     logo_path = _LOGO_BLACK if light_bg else _LOGO_WHITE
@@ -317,28 +365,54 @@ def make_cover_card(photo_bytes: bytes, headline: str, subtext: str = "") -> byt
     draw = ImageDraw.Draw(img)
     pad = int(w * 0.07)
     max_text_w = int(w * 0.86)
-
-    hl_size = max(44, int(h * 0.088))
-    sub_size = max(20, int(h * 0.038))
     cue_size = max(15, int(h * 0.026))
-
-    font_hl = _load_font(_FONT_HEADLINE, hl_size)
-    font_sub = _load_font(_FONT_BODY, sub_size)
     font_cue = _load_font(_FONT_BODY, cue_size)
 
-    # Headline starts at ~56% of image height
-    text_y = int(h * 0.56)
-    line_h = int(hl_size * 1.07)
-    for line in _wrap_text(draw, headline.upper(), font_hl, max_text_w):
-        draw.text((pad, text_y), line, font=font_hl, fill=_TEXT_WHITE)
-        text_y += line_h
+    # Fit headline and subtext so they never run off the bottom of the image.
+    font_hl, hl_lines, hl_sz = _fit_lines(
+        draw,
+        headline.upper(),
+        _FONT_HEADLINE,
+        max(44, int(h * 0.088)),
+        max(30, int(h * 0.05)),
+        max_text_w,
+        max_lines=3,
+    )
+    hl_line_h = int(hl_sz * 1.07)
 
-    text_y += int(sub_size * 0.55)
-
+    font_sub = None
+    sub_lines: list[str] = []
+    sub_line_h = 0
+    sub_sz = 0
     if subtext:
-        for line in _wrap_text(draw, subtext, font_sub, max_text_w)[:2]:
+        font_sub, sub_lines, sub_sz = _fit_lines(
+            draw,
+            subtext,
+            _FONT_BODY,
+            max(20, int(h * 0.038)),
+            max(15, int(h * 0.026)),
+            max_text_w,
+            max_lines=3,
+        )
+        sub_line_h = int(sub_sz * 1.3)
+
+    gap = int(sub_sz * 0.55) if sub_lines else 0
+    block_h = hl_line_h * len(hl_lines) + gap + sub_line_h * len(sub_lines)
+
+    # Bottom-anchor the text block just above the swipe cue so it can never
+    # overflow the image, but never let it climb above ~30% of the height.
+    bottom_limit = h - pad - cue_size * 2
+    text_y = max(bottom_limit - block_h, int(h * 0.30))
+
+    for line in hl_lines:
+        draw.text((pad, text_y), line, font=font_hl, fill=_TEXT_WHITE)
+        text_y += hl_line_h
+
+    if sub_lines:
+        text_y += gap
+        for line in sub_lines:
             draw.text((pad, text_y), line, font=font_sub, fill=(210, 215, 225, 225))
-            text_y += int(sub_size * 1.3)
+            text_y += sub_line_h
 
     # Swipe cue — bottom-left
     draw.text(
@@ -410,27 +484,50 @@ def make_dark_text_card(
             fill=_TEXT_NUM,
         )
 
-    # Headline — centred vertically in the lower half of the card
-    hl_size = max(38, int(h * 0.072))
-    body_size = max(18, int(h * 0.036))
+    # Headline — sits in the lower half of the card, auto-fitted so the
+    # headline and body never collide with the tagline or run off the card.
     tag_size = max(13, int(h * 0.024))
-
-    font_hl = _load_font(_FONT_HEADLINE, hl_size)
-    font_body = _load_font(_FONT_BODY, body_size)
     font_tag = _load_font(_FONT_BODY, tag_size)
 
     max_w = w - 2 * pad
-    text_y = int(h * 0.40)
 
-    for line in _wrap_text(draw, headline, font_hl, max_w):
-        draw.text((pad, text_y), line, font=font_hl, fill=_TEXT_WHITE)
-        text_y += int(hl_size * 1.1)
+    font_hl, hl_lines, hl_sz = _fit_lines(
+        draw,
+        headline,
+        _FONT_HEADLINE,
+        max(38, int(h * 0.072)),
+        max(28, int(h * 0.045)),
+        max_w,
+        max_lines=4,
+    )
+    hl_line_h = int(hl_sz * 1.1)
 
+    font_body = None
+    body_lines: list[str] = []
+    body_line_h = 0
+    body_sz = 0
     if body:
-        text_y += int(body_size * 0.7)
-        for line in _wrap_text(draw, body, font_body, max_w)[:3]:
+        font_body, body_lines, body_sz = _fit_lines(
+            draw,
+            body,
+            _FONT_BODY,
+            max(18, int(h * 0.036)),
+            max(14, int(h * 0.026)),
+            max_w,
+            max_lines=4,
+        )
+        body_line_h = int(body_sz * 1.38)
+
+    text_y = int(h * 0.40)
+    for line in hl_lines:
+        draw.text((pad, text_y), line, font=font_hl, fill=_TEXT_WHITE)
+        text_y += hl_line_h
+
+    if body_lines:
+        text_y += int(body_sz * 0.7)
+        for line in body_lines:
             draw.text((pad, text_y), line, font=font_body, fill=_TEXT_GRAY)
-            text_y += int(body_size * 1.38)
+            text_y += body_line_h
 
     # Brand tagline at the very bottom
     if brand_tagline:
@@ -466,27 +563,55 @@ def make_photo_text_card(
     img = Image.open(io.BytesIO(photo_bytes)).convert("RGBA")
     w, h = img.size
 
-    strip_ratio = 0.36
-    strip_h = int(h * strip_ratio)
-    strip_top = h - strip_h
-
-    # Semi-transparent dark strip
-    strip = Image.new("RGBA", (w, strip_h), (10, 12, 18, 218))
-    img.paste(strip, (0, strip_top), strip)
-
     draw = ImageDraw.Draw(img)
     pad = int(w * 0.06)
     max_w = w - 2 * pad
 
-    hl_size = max(30, int(h * 0.065))
-    body_size = max(16, int(h * 0.033))
     num_size = max(22, int(h * 0.045))
-
-    font_hl = _load_font(_FONT_HEADLINE, hl_size)
-    font_body = _load_font(_FONT_BODY, body_size)
     font_num = _load_font(_FONT_HEADLINE, num_size)
+    num_h = int(num_size * 1.5) if slide_number is not None else 0
 
-    text_y = strip_top + int(strip_h * 0.1)
+    # Fit headline + body first so the strip can be sized to actually cover them.
+    font_hl, hl_lines, hl_sz = _fit_lines(
+        draw,
+        headline,
+        _FONT_HEADLINE,
+        max(30, int(h * 0.065)),
+        max(22, int(h * 0.045)),
+        max_w,
+        max_lines=3,
+    )
+    hl_line_h = int(hl_sz * 1.08)
+
+    font_body = None
+    body_lines: list[str] = []
+    body_line_h = 0
+    body_sz = 0
+    if body:
+        font_body, body_lines, body_sz = _fit_lines(
+            draw,
+            body,
+            _FONT_BODY,
+            max(16, int(h * 0.033)),
+            max(13, int(h * 0.026)),
+            max_w,
+            max_lines=3,
+        )
+        body_line_h = int(body_sz * 1.35)
+
+    gap = int(body_sz * 0.3) if body_lines else 0
+    content_h = num_h + hl_line_h * len(hl_lines) + gap + body_line_h * len(body_lines)
+
+    # Strip auto-sizes to the content (capped at 55% of the image) so the text
+    # is always fully covered and never clipped by the image edge.
+    strip_pad = int(h * 0.05)
+    strip_h = min(int(h * 0.55), content_h + 2 * strip_pad)
+    strip_top = h - strip_h
+
+    strip = Image.new("RGBA", (w, strip_h), (10, 12, 18, 218))
+    img.paste(strip, (0, strip_top), strip)
+
+    text_y = strip_top + strip_pad
 
     if slide_number is not None:
         draw.text(
@@ -495,17 +620,17 @@ def make_photo_text_card(
             font=font_num,
             fill=(255, 255, 255, 130),
         )
-        text_y += int(num_size * 1.5)
+        text_y += num_h
 
-    for line in _wrap_text(draw, headline, font_hl, max_w)[:3]:
+    for line in hl_lines:
         draw.text((pad, text_y), line, font=font_hl, fill=_TEXT_WHITE)
-        text_y += int(hl_size * 1.08)
+        text_y += hl_line_h
 
-    if body:
-        text_y += int(body_size * 0.3)
-        for line in _wrap_text(draw, body, font_body, max_w)[:2]:
+    if body_lines:
+        text_y += gap
+        for line in body_lines:
             draw.text((pad, text_y), line, font=font_body, fill=_TEXT_GRAY)
-            text_y += int(body_size * 1.35)
+            text_y += body_line_h
 
     out = io.BytesIO()
     img.convert("RGB").save(out, format="PNG", optimize=True)
