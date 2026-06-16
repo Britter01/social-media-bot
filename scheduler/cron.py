@@ -47,8 +47,12 @@ def _round_robin_platforms(pillars: list[str], platforms: list[str]) -> list[tup
     return [(pillar, next(wheel)) for pillar in pillars]
 
 
-def run_content_pipeline() -> None:
-    """Generate, enrich, and schedule a batch of posts."""
+def run_content_pipeline() -> str:
+    """Generate, enrich, and schedule a batch of posts.
+
+    Returns a short diagnostic string so the dashboard Pipeline tab can show
+    what happened (agent status, post count, image generation result).
+    """
     from agents.carousel_agent import CarouselAgent
     from agents.content_agent import ContentAgent
     from agents.quality_agent import QualityAgent, QualityError
@@ -63,7 +67,7 @@ def run_content_pipeline() -> None:
         scheduler_agent = SchedulerAgent()
     except Exception:
         logger.exception("Content pipeline could not initialise; skipping run")
-        return
+        return "pipeline failed to initialise"
 
     thumbnail_agent = _safe_init(ThumbnailAgent, "thumbnail")
     video_agent = _safe_init(VideoAgent, "video")
@@ -78,6 +82,7 @@ def run_content_pipeline() -> None:
     last_slot: dict[str, datetime] = db.latest_scheduled_time_by_platform()
 
     created = 0
+    no_image = 0
     for pillar, platform in pairings[: config.posts_per_run] or pairings:
         post = Post(pillar=pillar, platform=platform)
         try:
@@ -91,6 +96,10 @@ def run_content_pipeline() -> None:
                 logger.warning("QC rejected post %s: %s", post.id, exc)
                 db.update_status(post, PostStatus.FAILED, error=f"QC: {exc}")
                 continue
+            # Track posts that have no image after media generation
+            has_image = bool(post.thumbnail_url) or bool(post.slides)
+            if not has_image:
+                no_image += 1
             after = last_slot.get(platform)
             scheduler_agent.schedule(post, after=after)
             last_slot[platform] = post.scheduled_time
@@ -103,10 +112,25 @@ def run_content_pipeline() -> None:
             except Exception:
                 logger.exception("Could not persist failure for post %s", post.id)
 
-    logger.info("=== Content pipeline finished: %d post(s) scheduled ===", created)
+    # Build a human-readable summary for the dashboard Pipeline tab.
+    parts = [f"created {created} post(s)"]
+    if no_image:
+        reasons = []
+        if carousel_agent is None:
+            reasons.append("carousel agent unavailable — check GOOGLE_API_KEY in Railway")
+        if thumbnail_agent is None:
+            reasons.append("thumbnail agent unavailable — check GOOGLE_API_KEY in Railway")
+        if not reasons:
+            reasons.append(
+                "Imagen ran but images did not upload — "
+                "check the 'media' bucket exists in Supabase Storage"
+            )
+        parts.append(f"{no_image} post(s) have no image: {'; '.join(reasons)}")
+    logger.info("=== Content pipeline finished: %s ===", " — ".join(parts))
+    return " — ".join(parts)
 
 
-def run_research_pipeline() -> None:
+def run_research_pipeline() -> str:
     """Discover and store trending topics for review.
 
     The research agent finds, scores, and persists topics. With the
@@ -127,16 +151,17 @@ def run_research_pipeline() -> None:
         research_agent = ResearchAgent(content_agent=content_agent, db=db)
     except Exception:
         logger.exception("Research pipeline could not initialise; skipping run")
-        return
+        return "pipeline failed to initialise"
 
     try:
         posts = research_agent.run()
     except Exception:
         logger.exception("Research pipeline failed during discovery; skipping run")
-        return
+        return "research discovery failed"
 
-    scheduled = _finalise_posts(posts, db, scheduler_agent)
-    logger.info("=== Research pipeline finished: %d post(s) scheduled ===", scheduled)
+    scheduled, summary = _finalise_posts(posts, db, scheduler_agent)
+    logger.info("=== Research pipeline finished: %s ===", summary)
+    return summary
 
 
 def run_approved_pipeline() -> None:
@@ -169,12 +194,17 @@ def run_approved_pipeline() -> None:
         return
 
     logger.info("Scheduling %d post(s) from approved topics", len(posts))
-    scheduled = _finalise_posts(posts, db, scheduler_agent, persist_insert=False)
-    logger.info("Approved-topic pipeline finished: %d post(s) scheduled", scheduled)
+    scheduled, summary = _finalise_posts(posts, db, scheduler_agent, persist_insert=False)
+    logger.info("Approved-topic pipeline finished: %s", summary)
 
 
-def _finalise_posts(posts: list[Post], db, scheduler_agent, *, persist_insert: bool = True) -> int:
-    """Add media, pick a slot, and persist each post; return the count scheduled.
+def _finalise_posts(
+    posts: list[Post], db, scheduler_agent, *, persist_insert: bool = True
+) -> tuple[int, str]:
+    """Add media, pick a slot, and persist each post.
+
+    Returns ``(scheduled_count, diagnostic_string)`` so callers can surface
+    agent-availability warnings in the Pipeline tab.
 
     Instagram and Facebook posts are always produced as carousels (see
     _apply_media).  All other platforms get a single image or video.
@@ -196,6 +226,7 @@ def _finalise_posts(posts: list[Post], db, scheduler_agent, *, persist_insert: b
     # Seed from the DB so new posts land after whatever's already queued.
     last_slot: dict[str, datetime] = db.latest_scheduled_time_by_platform()
     scheduled = 0
+    no_image = 0
 
     for post in posts:
         try:
@@ -211,6 +242,8 @@ def _finalise_posts(posts: list[Post], db, scheduler_agent, *, persist_insert: b
                 else:
                     db.upsert(post)
                 continue
+            if not (post.thumbnail_url or post.slides):
+                no_image += 1
             after = last_slot.get(post.platform)
             scheduler_agent.schedule(post, after=after)
             last_slot[post.platform] = post.scheduled_time
@@ -226,7 +259,21 @@ def _finalise_posts(posts: list[Post], db, scheduler_agent, *, persist_insert: b
                 db.update_status(post, PostStatus.FAILED, error="finalise error")
             except Exception:
                 logger.exception("Could not persist failure for post %s", post.id)
-    return scheduled
+
+    parts = [f"scheduled {scheduled} post(s)"]
+    if no_image:
+        reasons = []
+        if carousel_agent is None:
+            reasons.append("carousel agent unavailable — check GOOGLE_API_KEY in Railway")
+        if thumbnail_agent is None:
+            reasons.append("thumbnail agent unavailable — check GOOGLE_API_KEY in Railway")
+        if not reasons:
+            reasons.append(
+                "Imagen ran but images did not upload — "
+                "check the 'media' bucket exists in Supabase Storage"
+            )
+        parts.append(f"{no_image} post(s) have no image: {'; '.join(reasons)}")
+    return scheduled, " — ".join(parts)
 
 
 def _apply_media(post: Post, thumbnail_agent, video_agent, quality_agent, carousel_agent) -> None:
@@ -614,9 +661,9 @@ def run_pending_commands() -> None:
                 run_image_refresh()
                 run_publisher()
             elif command == "content":
-                run_content_pipeline()
+                result_msg = run_content_pipeline()
             elif command == "research":
-                run_research_pipeline()
+                result_msg = run_research_pipeline()
             elif command == "weekly_strategy":
                 run_weekly_strategy()
             elif command == "analytics":

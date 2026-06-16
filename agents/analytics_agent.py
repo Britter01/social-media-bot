@@ -292,7 +292,7 @@ class AnalyticsAgent:
             resp = requests.get(
                 f"{_GRAPH_BASE}/{platform_post_id}/insights",
                 params={
-                    "metric": "post_impressions,post_reactions_by_type_total,post_clicks",
+                    "metric": "post_impressions,post_reactions_by_type_total",
                     "period": "lifetime",
                     "access_token": token,
                 },
