@@ -974,11 +974,11 @@ def _post_card(
     tab_pipeline,
 ) = st.tabs(
     [
-        f"Topics  {len(pending)}",
-        f"In Progress  {len(in_progress)}",
-        f"Scheduled  {len(scheduled)}",
+        "Topics",
+        "In Progress",
+        "Scheduled",
         "Calendar",
-        f"Published  {len(published)}",
+        "Published",
         "Analytics",
         "Pipeline",
     ]
