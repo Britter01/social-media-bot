@@ -325,13 +325,11 @@ components.html(
     /* ── Image fullscreen toolbar ──
        DOM (confirmed via inspector):
          stFullScreenFrame > div.e1plw2qp2 > [stElementToolbar, stImage]
-       The wrapper div has no position:relative so stElementToolbar's
-       position:absolute resolves against a high ancestor (stMain), putting
-       it near the tab bar.  Make stFullScreenFrame the containing block and
-       pin the toolbar to its top-right corner. */
-    [data-testid="stFullScreenFrame"] {
+       Make the direct child wrapper (not stFullScreenFrame itself — changing
+       its position breaks the fullscreen expand calculation) the containing
+       block for stElementToolbar and pin it to the top-right corner. */
+    [data-testid="stFullScreenFrame"] > div {
       position: relative !important;
-      overflow: visible !important;
     }
     [data-testid="stElementToolbar"] {
       position: absolute !important;
@@ -648,7 +646,7 @@ def _render_pipeline_controls(scope: str) -> None:
 with st.sidebar:
     st.markdown(
         f"""
-<div style="padding:12px 0 22px">
+<div style="padding:12px 0 22px;text-align:center">
   {_logo_html(150)}
 </div>
 """,
@@ -678,16 +676,13 @@ st.markdown(
 <div style="background:{OFF_WHITE};border:1px solid {SMOKE};border-radius:18px;
             padding:20px 30px;margin-bottom:16px;
             display:flex;align-items:center;justify-content:space-between">
-  <div style="display:flex;align-items:center;gap:20px">
-    {_logo_html(56)}
-    <div>
-      <div style="font-family:'Figtree',sans-serif;font-size:11px;
-                  font-weight:600;letter-spacing:0.18em;text-transform:uppercase;
-                  color:{ACCENT};margin-bottom:6px">Content Pipeline</div>
-      <div style="font-family:'Figtree',sans-serif;font-size:28px;
-                  font-weight:700;letter-spacing:-0.02em;color:{CHARCOAL};line-height:1.05">
-        Everything that goes out, in one place.
-      </div>
+  <div>
+    <div style="font-family:'Figtree',sans-serif;font-size:11px;
+                font-weight:600;letter-spacing:0.18em;text-transform:uppercase;
+                color:{ACCENT};margin-bottom:6px">Content Pipeline</div>
+    <div style="font-family:'Figtree',sans-serif;font-size:28px;
+                font-weight:700;letter-spacing:-0.02em;color:{CHARCOAL};line-height:1.05">
+      Everything that goes out, in one place.
     </div>
   </div>
   <div style="text-align:right">
