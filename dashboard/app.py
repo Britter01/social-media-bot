@@ -300,11 +300,17 @@ components.html(
       border: 1px solid var(--smoke) !important;
       color: var(--charcoal) !important; border-radius: 10px !important;
     }
-    /* leave room on the right so typed text never sits under the password
-       show/hide (eye) icon */
-    [data-testid="stTextInput"] input[type="password"],
-    [data-testid="stTextInput"] input[type="text"] {
+    /* Keep typed text clear of the password show/hide (eye) button at the right
+       of the field. Padding goes on the <input> so the dots stop short of the
+       icon whether the field is masked (type=password) or revealed (type=text). */
+    [data-testid="stTextInput"] input {
       padding-right: 2.75rem !important;
+    }
+    /* The "Press Enter to submit form" helper is an absolutely-positioned
+       overlay across the right of the field — it sits over the dots next to the
+       eye icon, which is what reads as text "running over" it. Hide it. */
+    [data-testid="stTextInput"] [data-testid="InputInstructions"] {
+      display: none !important;
     }
     [data-testid="stTextInput"] input:focus,
     [data-testid="stNumberInput"] input:focus { border-color: var(--accent) !important; }
