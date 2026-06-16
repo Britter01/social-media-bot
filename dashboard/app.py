@@ -177,33 +177,44 @@ components.html(
     footer * { display: none !important; }
 
     /* ── Sidebar open/close toggle — keep visible across all Streamlit versions ──
-         Streamlit 1.35+ uses stSidebarNavCollapseButton for the chevron shown
-         when the sidebar is open, and stSidebarCollapsedControl / collapsedControl
-         for the button shown when the sidebar is closed.  All must be explicitly
-         un-hidden because our toolbar display:none rule can bleed into them. */
+         Test-ids have churned between releases, so target every known variant:
+           • stSidebarCollapseButton  — collapse chevron inside the OPEN sidebar
+           • stExpandSidebarButton    — expand button shown when CLOSED (1.4x)
+           • stSidebarCollapsedControl / collapsedControl — older closed-state btn
+         All forced visible because our toolbar display:none rule can bleed in,
+         and the header is given height + z-index so the button can't be clipped. */
+    [data-testid="stHeader"] { min-height: 2.875rem !important; z-index: 999990 !important; }
+    [data-testid="stSidebarCollapseButton"],
+    [data-testid="stSidebarCollapseButton"] button,
+    [data-testid="stExpandSidebarButton"],
+    [data-testid="stExpandSidebarButton"] button,
     [data-testid="stSidebarCollapsedControl"],
-    [data-testid="collapsedControl"],
-    [data-testid="stSidebarNavCollapseButton"],
-    [data-testid="stSidebarNavCollapseButton"] button {
+    [data-testid="collapsedControl"] {
       display: flex !important; visibility: visible !important; opacity: 1 !important;
     }
+    [data-testid="stExpandSidebarButton"],
     [data-testid="stSidebarCollapsedControl"],
     [data-testid="collapsedControl"] {
       z-index: 1000000 !important; top: 0.55rem !important; left: 0.55rem !important;
     }
+    [data-testid="stSidebarCollapseButton"] button,
+    [data-testid="stExpandSidebarButton"] button,
     [data-testid="stSidebarCollapsedControl"] button,
     [data-testid="collapsedControl"] button {
       background: var(--white) !important; border: 1px solid var(--smoke) !important;
       border-radius: 980px !important; color: var(--charcoal) !important;
       box-shadow: 0 1px 4px rgba(0,0,0,0.08) !important;
     }
+    [data-testid="stSidebarCollapseButton"] button:hover,
+    [data-testid="stExpandSidebarButton"] button:hover,
     [data-testid="stSidebarCollapsedControl"] button:hover,
     [data-testid="collapsedControl"] button:hover {
       border-color: var(--charcoal) !important; background: var(--off-white) !important;
     }
+    [data-testid="stSidebarCollapseButton"] svg,
+    [data-testid="stExpandSidebarButton"] svg,
     [data-testid="stSidebarCollapsedControl"] svg,
-    [data-testid="collapsedControl"] svg,
-    [data-testid="stSidebarNavCollapseButton"] svg {
+    [data-testid="collapsedControl"] svg {
       color: var(--charcoal) !important; fill: var(--charcoal) !important;
     }
 
