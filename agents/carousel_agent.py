@@ -300,8 +300,12 @@ class CarouselAgent:
                         brand_tagline=self._cfg.brand_tagline,
                     )
 
-                # Brand logo overlay on every slide
-                final_bytes = add_brand_overlay(card, self._cfg.brand_name, self._cfg.brand_tagline)
+                # Brand logo overlay on every slide. Force the top-right corner:
+                # all slide text sits in the lower half, so a fixed top-right
+                # placement guarantees the logo never lands on top of the copy.
+                final_bytes = add_brand_overlay(
+                    card, self._cfg.brand_name, self._cfg.brand_tagline, corner="top_right"
+                )
 
                 # QC check
                 if quality_agent is not None:
@@ -310,8 +314,40 @@ class CarouselAgent:
                     try:
                         quality_agent.check_image_bytes(post, final_bytes, label=f"slide {i}")
                     except QualityError as exc:
-                        logger.warning("QC: slide %d failed (%s) — skipping", i, exc)
-                        continue
+                        # A photo slide can fail QC if Imagen hallucinated text
+                        # into the photo. Rather than drop the slide (which
+                        # leaves the carousel short of pages), re-render it as a
+                        # text-only dark card — no photo means no hallucination
+                        # risk — and keep it.
+                        if role != "cta" and (role == "cover" or use_photo):
+                            logger.warning(
+                                "QC: slide %d failed (%s) — falling back to dark text card", i, exc
+                            )
+                            card = make_dark_text_card(
+                                slide["headline"],
+                                slide["body"],
+                                slide_number,
+                                brand_name=self._cfg.brand_name,
+                                brand_tagline=self._cfg.brand_tagline,
+                            )
+                            final_bytes = add_brand_overlay(
+                                card,
+                                self._cfg.brand_name,
+                                self._cfg.brand_tagline,
+                                corner="top_right",
+                            )
+                            try:
+                                quality_agent.check_image_bytes(
+                                    post, final_bytes, label=f"slide {i} (fallback)"
+                                )
+                            except QualityError as exc2:
+                                logger.warning(
+                                    "QC: fallback slide %d also failed (%s) — skipping", i, exc2
+                                )
+                                continue
+                        else:
+                            logger.warning("QC: slide %d failed (%s) — skipping", i, exc)
+                            continue
 
                 image_url = self._upload(carousel_id, i, final_bytes)
                 result.append(

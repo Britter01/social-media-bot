@@ -300,6 +300,12 @@ components.html(
       border: 1px solid var(--smoke) !important;
       color: var(--charcoal) !important; border-radius: 10px !important;
     }
+    /* leave room on the right so typed text never sits under the password
+       show/hide (eye) icon */
+    [data-testid="stTextInput"] input[type="password"],
+    [data-testid="stTextInput"] input[type="text"] {
+      padding-right: 2.75rem !important;
+    }
     [data-testid="stTextInput"] input:focus,
     [data-testid="stNumberInput"] input:focus { border-color: var(--accent) !important; }
     [data-baseweb="select"] > div:first-child {
@@ -576,9 +582,8 @@ def _render_pipeline_controls(scope: str) -> None:
         if st.button(label, use_container_width=True, help=tip, key=f"{scope}_{cmd}"):
             try:
                 _queue_command(cmd)
-                st.success("Queued — worker picks up within 2 min.")
-            except RuntimeError as e:
-                st.warning(str(e))
+            except RuntimeError:
+                pass
             except Exception:
                 st.error("Failed to queue command.")
 
@@ -606,9 +611,8 @@ def _render_pipeline_controls(scope: str) -> None:
         try:
             _queue_command("weekly_strategy", cooldown_key="rg_strategy")
             _queue_command("content", cooldown_key="rg_content")
-            st.success("Queued: competitor analysis + post generation.")
-        except RuntimeError as e:
-            st.warning(str(e))
+        except RuntimeError:
+            pass
         except Exception:
             st.error("Failed to queue commands.")
 
@@ -1001,9 +1005,8 @@ with tab_scheduled:
                         ).eq("id", pid).execute()
                         try:
                             _queue_command("publish", cooldown_key=f"pub_{pid}")
-                            st.success("Queued — publishing within 2 min.")
-                        except RuntimeError as e:
-                            st.warning(str(e))
+                        except RuntimeError:
+                            pass
                     if pid and st.button(
                         "Dismiss", key=f"dismiss_sched_{pid}", use_container_width=True
                     ):
@@ -1361,14 +1364,12 @@ if failed:
                     db.table("posts").update({"status": "scheduled", "error": None}).in_(
                         "id", ids
                     ).execute()
-                    st.success(f"Reset {len(ids)} post(s) to scheduled.")
                     st.rerun()
         with col_del_all:
             if st.button("Dismiss all", key="delete_all_failed"):
                 ids = [p["id"] for p in failed if p.get("id")]
                 if ids:
                     db.table("posts").update({"status": "dismissed"}).in_("id", ids).execute()
-                    st.success(f"Dismissed {len(ids)} failed post(s).")
                     st.rerun()
 
         for post in failed:
@@ -1394,7 +1395,6 @@ if failed:
                     db.table("posts").update({"status": "scheduled", "error": None}).eq(
                         "id", post_id
                     ).execute()
-                    st.success("Reset.")
                     st.rerun()
             with col_del:
                 if post_id and st.button("Dismiss", key=f"delete_{post_id}"):
