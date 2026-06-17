@@ -40,6 +40,29 @@ _SCENE_FILES = [
     "scene4_cafe_latte.png",
 ]
 
+# Pre-measured screen corners for each scene file (verified via OpenCV contour detection).
+# Format: filename → (is_white_screen, [TL, TR, BR, BL]) in image pixel coordinates.
+# These replace runtime detection for the four known scenes, giving exact perspective
+# warping without being sensitive to lighting variations or threshold tuning.
+_SCENE_CORNERS: dict[str, tuple[bool, list[tuple[int, int]]]] = {
+    "scene1_library.png": (
+        False,
+        [(167, 896), (1107, 851), (1166, 1401), (382, 1496)],
+    ),
+    "scene2_cafe_iced.png": (
+        False,
+        [(396, 1020), (1167, 1013), (1190, 1610), (395, 1653)],
+    ),
+    "scene3_woman.png": (
+        True,
+        [(1276, 945), (1891, 965), (1822, 1464), (1177, 1378)],
+    ),
+    "scene4_cafe_latte.png": (
+        False,
+        [(165, 720), (1038, 664), (1098, 1243), (221, 1371)],
+    ),
+}
+
 # Brightness thresholds for screen detection
 _BLACK_THRESH = 28  # pixels darker than this → "black screen" candidate
 _WHITE_THRESH = 225  # pixels brighter than this → "white screen" candidate
@@ -142,24 +165,27 @@ def _detect_screen(pil_img):
         if fill < _MIN_FILL_DENSITY:
             continue
 
-        # Refine the four perspective corners from top/bottom quintile pixels
-        # inside the identified region.
+        # Refine the four perspective corners using the diagonal-sort method:
+        # TL=min(x+y), TR=min(y−x), BR=max(x+y), BL=max(y−x).
+        # This correctly handles screens at any rotation, unlike the old approach
+        # which forced horizontal top/bottom edges (TL.y always == TR.y).
+        # Average the extreme 5 % to reduce noise from scattered pixels.
         ys_r, xs_r = np.where(raw_mask[y1:y2, x1:x2])
         ys_r = ys_r + y1
         xs_r = xs_r + x1
 
-        q = scr_h * 0.2
-        top_m = ys_r < y1 + q
-        bot_m = ys_r > y2 - q
+        d_sum = xs_r.astype(np.float64) + ys_r  # min → TL, max → BR
+        d_dif = ys_r.astype(np.float64) - xs_r  # min → TR, max → BL
 
-        if top_m.any() and bot_m.any():
-            tl = (float(np.percentile(xs_r[top_m], 5)), float(np.percentile(ys_r[top_m], 5)))
-            tr = (float(np.percentile(xs_r[top_m], 95)), float(np.percentile(ys_r[top_m], 5)))
-            br = (float(np.percentile(xs_r[bot_m], 95)), float(np.percentile(ys_r[bot_m], 95)))
-            bl = (float(np.percentile(xs_r[bot_m], 5)), float(np.percentile(ys_r[bot_m], 95)))
-        else:
-            tl, tr = (float(x1), float(y1)), (float(x2), float(y1))
-            br, bl = (float(x2), float(y2)), (float(x1), float(y2))
+        def _corner(score, pct):
+            thresh = np.percentile(score, pct)
+            m = (score <= thresh) if pct < 50 else (score >= thresh)
+            return (float(np.mean(xs_r[m])), float(np.mean(ys_r[m])))
+
+        tl = _corner(d_sum, 5)
+        tr = _corner(d_dif, 5)
+        br = _corner(d_sum, 95)
+        bl = _corner(d_dif, 95)
 
         corners = np.array([tl, tr, br, bl], dtype=np.float32)
         logger.debug(
@@ -334,16 +360,22 @@ def make_scene_cover(
 
     scene_w, scene_h = scene.size
 
-    corners, is_white = _detect_screen(scene)
-    if corners is None:
-        logger.info("Screen not detected in %s; skipping scene cover", os.path.basename(scene_path))
-        return None
+    scene_basename = os.path.basename(scene_path)
+    if scene_basename in _SCENE_CORNERS:
+        is_white, corner_list = _SCENE_CORNERS[scene_basename]
+        import numpy as np
+
+        corners = np.array(corner_list, dtype=np.float32)
+        logger.debug("Using pre-measured corners for %s", scene_basename)
+    else:
+        corners, is_white = _detect_screen(scene)
+        if corners is None:
+            logger.info("Screen not detected in %s; skipping scene cover", os.path.basename(scene_path))
+            return None
 
     tl, tr, br, bl = corners
 
     # Compute the pixel dimensions of the detected screen area
-    import numpy as np
-
     scr_w = int(max(np.linalg.norm(tr - tl), np.linalg.norm(br - bl)))
     scr_h = int(max(np.linalg.norm(bl - tl), np.linalg.norm(br - tr)))
     if scr_w < 60 or scr_h < 40:
