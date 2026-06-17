@@ -220,8 +220,15 @@ class CarouselAgent:
                     brand_tagline=self._cfg.brand_tagline,
                 )
                 # Brand logo overlay, forced top-right (all copy sits lower-half).
+                # crop_bars=False: text cards have uniform dark margins that the
+                # hallucinated-bar cropper would wrongly strip (clipping the tagline).
                 final_bytes = add_brand_overlay(
-                    card, self._cfg.brand_name, self._cfg.brand_tagline, corner="top_right"
+                    card,
+                    self._cfg.brand_name,
+                    self._cfg.brand_tagline,
+                    corner="top_right",
+                    crop_bars=False,
+                    logo_scale=1.625,  # ~260px on a 1080 card — keeps the subtitle crisp
                 )
 
                 image_url = self._upload(carousel_id, i, final_bytes)

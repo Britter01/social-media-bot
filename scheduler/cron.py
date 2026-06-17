@@ -382,11 +382,17 @@ def run_image_refresh() -> None:
 
         refreshed = 0
 
+        _carousel_pf = list(_CAROUSEL_PLATFORMS)
+
         def _carousel_rows(status: str) -> list:
+            # Any IG/FB post that still lacks slides — regardless of whether it
+            # was saved as 'standard' (e.g. an older single-image row) or
+            # 'carousel'. These are rebuilt as 4-slide text carousels, never as
+            # single-image posts.
             return (
                 sb.table("posts")
                 .select("*")
-                .eq("post_type", "carousel")
+                .in_("platform", _carousel_pf)
                 .eq("status", status)
                 .is_("thumbnail_url", "null")
                 .execute()
@@ -395,9 +401,12 @@ def run_image_refresh() -> None:
             )
 
         def _standard_rows(status: str) -> list:
+            # Single-image platforms only (Twitter/LinkedIn/YouTube/TikTok).
+            # IG/FB are deliberately excluded — they are carousel-only.
             return (
                 sb.table("posts")
                 .select("*")
+                .not_.in_("platform", _carousel_pf)
                 .eq("post_type", "standard")
                 .eq("status", status)
                 .is_("thumbnail_url", "null")
@@ -431,6 +440,9 @@ def run_image_refresh() -> None:
                         plan = carousel_agent._plan_carousel(source)
                         slides = carousel_agent._generate_slides(new_id, source, plan)
                         update: dict = {
+                            # Force carousel type so any older single-image
+                            # IG/FB row is converted into a proper carousel.
+                            "post_type": "carousel",
                             "title": plan.cover_headline,
                             "slides": slides,
                             "thumbnail_url": slides[0]["image_url"] if slides else None,
@@ -535,6 +547,7 @@ def run_qc_retry() -> None:
     """
     from supabase import create_client
 
+    from agents.carousel_agent import CarouselAgent
     from agents.quality_agent import QualityAgent, QualityError
     from agents.scheduler_agent import SchedulerAgent
     from agents.thumbnail_agent import ThumbnailAgent
@@ -543,6 +556,7 @@ def run_qc_retry() -> None:
         sb = create_client(config.supabase_url, config.supabase_key)
         thumbnail_agent = _safe_init(ThumbnailAgent, "thumbnail")
         quality_agent = _safe_init(QualityAgent, "quality")
+        carousel_agent = _safe_init(CarouselAgent, "carousel")
         scheduler_agent = SchedulerAgent()
         db = get_database()
     except Exception:
@@ -562,15 +576,36 @@ def run_qc_retry() -> None:
     for row in rows:
         post = Post.from_row(row)
         try:
-            try:
-                _generate_media(
-                    post, thumbnail_agent, video_agent=None, quality_agent=quality_agent
-                )
-            except QualityError as exc:
-                logger.warning("QC retry: post %s still failing after regen: %s", post.id[:8], exc)
-                post.mark(PostStatus.FAILED, error=f"QC (retry): {exc}")
-                sb.table("posts").update({"error": post.error}).eq("id", post.id).execute()
-                continue
+            # IG/FB are carousel-only — rebuild a text carousel rather than a
+            # single image, otherwise QC retry would resurrect the old design.
+            if post.platform in _CAROUSEL_PLATFORMS:
+                if not carousel_agent:
+                    logger.warning("QC retry: carousel agent unavailable for %s", post.id[:8])
+                    continue
+                carousel = carousel_agent.create_from_post(post)
+                if not carousel.slides:
+                    logger.warning(
+                        "QC retry: carousel rebuild produced 0 slides for %s", post.id[:8]
+                    )
+                    continue
+                post.post_type = carousel.post_type
+                post.slides = carousel.slides
+                post.thumbnail_url = carousel.thumbnail_url
+                post.title = carousel.title or post.title
+                post.caption = carousel.caption or post.caption
+                post.error = None
+            else:
+                try:
+                    _generate_media(
+                        post, thumbnail_agent, video_agent=None, quality_agent=quality_agent
+                    )
+                except QualityError as exc:
+                    logger.warning(
+                        "QC retry: post %s still failing after regen: %s", post.id[:8], exc
+                    )
+                    post.mark(PostStatus.FAILED, error=f"QC (retry): {exc}")
+                    sb.table("posts").update({"error": post.error}).eq("id", post.id).execute()
+                    continue
 
             scheduler_agent.schedule(post)
             db.upsert(post)

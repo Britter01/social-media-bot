@@ -72,24 +72,30 @@ _BAR_VAR_FRACTION = 0.20
 
 # ── Brand font paths (bundled in assets/fonts/) ───────────────────────────────
 _FONTS_DIR = os.path.join(_ASSETS_ROOT, "fonts")
-# Google Fonts download URLs used as a fallback if the bundled TTFs are missing
+# Brand-kit typefaces (see britetechlifestyle brand kit):
+#   • Headline/hero — the kit's embedded display bold (bundled as BriteHero-Bold).
+#   • Body          — Figtree (variable, default Light 300 — the kit's body weight).
+#   • Tagline       — Playfair Display Italic (the kit's italic accent / banner tagline).
+# Google Fonts download URLs are a fallback if the bundled TTFs are ever missing
 # from the deployment container (should not normally happen — files are in git).
 _FONT_URLS = {
-    "BigShoulders-Bold.ttf": (
-        "https://fonts.gstatic.com/s/bigshouldersdisplay/v21/"
-        "NGSkv5QpQWlGXdg8tnOsCRm29ngl2McajfSa.ttf"
+    "Figtree-Regular.ttf": (
+        "https://github.com/google/fonts/raw/main/ofl/figtree/Figtree%5Bwght%5D.ttf"
     ),
-    "BricolageGrotesque-Regular.ttf": (
-        "https://fonts.gstatic.com/s/bricolagegrotesque/v2/pxiAZBhjZQIdd8jGnEotWQ.ttf"
+    "PlayfairDisplay-Italic.ttf": (
+        "https://github.com/google/fonts/raw/main/ofl/playfairdisplay/"
+        "PlayfairDisplay-Italic%5Bwght%5D.ttf"
     ),
 }
-_FONT_HEADLINE = os.path.join(_FONTS_DIR, "BigShoulders-Bold.ttf")
-_FONT_BODY = os.path.join(_FONTS_DIR, "BricolageGrotesque-Regular.ttf")
+_FONT_HEADLINE = os.path.join(_FONTS_DIR, "BriteHero-Bold.ttf")
+_FONT_BODY = os.path.join(_FONTS_DIR, "Figtree-Regular.ttf")
+_FONT_TAGLINE = os.path.join(_FONTS_DIR, "PlayfairDisplay-Italic.ttf")
 
-# ── Dark card colour palette ──────────────────────────────────────────────────
-_CARD_BG = (12, 14, 20)  # near-black, slight blue tint — tech feel
-_TEXT_WHITE = (255, 255, 255, 255)
-_TEXT_GRAY = (155, 163, 178, 220)  # body copy
+# ── Dark card colour palette (brand kit) ──────────────────────────────────────
+# Dark brand layouts (platform banners / cards) use pure black per the kit.
+_CARD_BG = (0, 0, 0)  # #000000 — brand black
+_TEXT_WHITE = (255, 255, 255, 255)  # #FFFFFF headline
+_TEXT_GRAY = (161, 161, 166, 235)  # #A1A1A6 silver — body copy on dark
 _TEXT_NUM = (255, 255, 255, 18)  # giant watermark slide number, barely visible
 
 
@@ -292,6 +298,8 @@ def add_brand_overlay(
     bar_opacity: int = 255,
     dark_logo: bool = False,
     corner: str | None = None,
+    crop_bars: bool = True,
+    logo_scale: float = 1.0,
 ) -> bytes:
     """Composite the brand logo PNG onto *image_bytes*.
 
@@ -317,7 +325,12 @@ def add_brand_overlay(
     img = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
     width, height = img.size
 
-    img = _crop_hallucinated_bars(img)
+    # Hallucinated-bar cropping is only meaningful for AI-generated photos.
+    # Deterministic text cards have uniform dark margins that this would
+    # mistake for bars — cropping + rescaling then clips the tagline — so
+    # callers rendering brand text cards pass crop_bars=False.
+    if crop_bars:
+        img = _crop_hallucinated_bars(img)
 
     logo_ref_path = _LOGO_WHITE
     if not os.path.exists(logo_ref_path):
@@ -332,7 +345,11 @@ def add_brand_overlay(
 
     logo_cropped_ref = logo_full_ref.crop(_LOGO_CONTENT_BOX)
 
-    target_w = int(max(_LOGO_MIN_WIDTH, min(_LOGO_MAX_WIDTH, width * _LOGO_WIDTH_RATIO)))
+    # logo_scale lets specific renderers (e.g. carousels) enlarge the logo so the
+    # thin "TECH LIFESTYLE" subtitle stays crisp instead of anti-aliasing to grey.
+    target_w = int(
+        max(_LOGO_MIN_WIDTH, min(_LOGO_MAX_WIDTH, width * _LOGO_WIDTH_RATIO)) * logo_scale
+    )
     target_h = int(logo_cropped_ref.height * target_w / logo_cropped_ref.width)
 
     if corner in {"top_right", "top_left", "bottom_right", "bottom_left"}:
@@ -502,31 +519,44 @@ def make_dark_text_card(
     draw = ImageDraw.Draw(img)
     pad = int(w * 0.08)
 
-    # Thin accent line — top-left corner
-    draw.line(
-        [(pad, int(h * 0.055)), (int(w * 0.22), int(h * 0.055))],
-        fill=(255, 255, 255, 55),
+    # Thin accent line — top-left corner. Composited on its own transparent
+    # layer so its alpha survives the final convert("RGB") flatten.
+    line_layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    ImageDraw.Draw(line_layer).line(
+        [(pad, int(h * 0.06)), (int(w * 0.20), int(h * 0.06))],
+        fill=(255, 255, 255, 70),
         width=2,
     )
+    img = Image.alpha_composite(img, line_layer)
+    draw = ImageDraw.Draw(img)
 
-    # Giant watermark slide number (right-aligned, extremely faint)
+    # Giant watermark slide number — faint, lower-LEFT so it never collides with
+    # the brand logo (which is composited top-right). Drawn on its own
+    # transparent layer: drawing low-alpha text straight onto the card and then
+    # convert("RGB") would DROP the alpha and render it solid white (the cause
+    # of the over-bright "01" overlapping the logo).
     if slide_number is not None:
         num_str = f"{slide_number:02d}"
-        num_size = max(130, int(h * 0.22))
+        num_size = max(110, int(h * 0.16))
         font_num = _load_font(_FONT_HEADLINE, num_size)
-        bbox = draw.textbbox((0, 0), num_str, font=font_num)
-        num_w = bbox[2] - bbox[0]
-        draw.text(
-            (w - num_w - pad, int(h * 0.03)),
+        nbbox = draw.textbbox((0, 0), num_str, font=font_num)
+        num_h = nbbox[3] - nbbox[1]
+        num_layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        ImageDraw.Draw(num_layer).text(
+            (pad, int(h * 0.30) - num_h),
             num_str,
             font=font_num,
-            fill=_TEXT_NUM,
+            fill=(255, 255, 255, 28),
         )
+        img = Image.alpha_composite(img, num_layer)
+        draw = ImageDraw.Draw(img)
 
     # Headline — sits in the lower half of the card, auto-fitted so the
     # headline and body never collide with the tagline or run off the card.
-    tag_size = max(13, int(h * 0.024))
-    font_tag = _load_font(_FONT_BODY, tag_size)
+    # Tagline uses Playfair Display Italic (brand accent face); size it a touch
+    # larger since serif italics read smaller than the sans body.
+    tag_size = max(15, int(h * 0.028))
+    font_tag = _load_font(_FONT_TAGLINE, tag_size)
 
     max_w = w - 2 * pad
 
@@ -568,13 +598,17 @@ def make_dark_text_card(
             draw.text((pad, text_y), line, font=font_body, fill=_TEXT_GRAY)
             text_y += body_line_h
 
-    # Brand tagline at the very bottom
+    # Brand tagline — positioned so its lowest ink (including descenders) sits a
+    # clear margin above the bottom edge. textbbox[3] is the bottom extent from
+    # the draw origin, so y = h - margin - bbox[3] guarantees no clipping.
     if brand_tagline:
+        tbbox = draw.textbbox((0, 0), brand_tagline, font=font_tag)
+        margin = int(h * 0.05)
         draw.text(
-            (pad, h - tag_size * 2 - pad // 2),
+            (pad, h - margin - tbbox[3]),
             brand_tagline,
             font=font_tag,
-            fill=(120, 128, 145, 160),
+            fill=(120, 128, 145),
         )
 
     out = io.BytesIO()
