@@ -46,6 +46,23 @@ logger = logging.getLogger(__name__)
 _FORMATS = "tips | howto | breakdown | compare | myths"
 
 
+def _make_scene_cover(carousel_id: str, slide: dict, cfg) -> bytes | None:
+    """Attempt to render a lifestyle scene cover; return bytes or None."""
+    try:
+        from core.cover_image import make_scene_cover
+
+        return make_scene_cover(
+            carousel_id,
+            slide["headline"],
+            slide["body"],
+            brand_name=cfg.brand_name,
+            brand_tagline=cfg.brand_tagline,
+        )
+    except Exception:
+        logger.debug("Scene cover unavailable", exc_info=True)
+        return None
+
+
 class CarouselSlide(BaseModel):
     headline: str = Field(description="Bold, punchy slide headline — max 8 words.")
     body: str = Field(description="1-2 supporting sentences. Conversational, not corporate.")
@@ -212,23 +229,42 @@ class CarouselAgent:
                 else:
                     slide_number = None  # cover and CTA show no number
 
-                card = make_dark_text_card(
-                    slide["headline"],
-                    slide["body"],
-                    slide_number,
-                    brand_name=self._cfg.brand_name,
-                    brand_tagline=self._cfg.brand_tagline,
-                )
-                # Brand logo overlay, forced top-right (all copy sits lower-half).
+                if i == 0:
+                    # Slide 0: try a lifestyle scene cover (text warped onto a laptop
+                    # screen mockup). Falls back to dark text card if scenes are missing
+                    # or screen detection fails, so the carousel always has a cover.
+                    card = _make_scene_cover(carousel_id, slide, self._cfg)
+                    if card is None:
+                        card = make_dark_text_card(
+                            slide["headline"], slide["body"], slide_number,
+                            brand_name=self._cfg.brand_name,
+                            brand_tagline=self._cfg.brand_tagline,
+                        )
+                    # Auto-pick quietest corner for the logo on a photo cover
+                    logo_corner: str | None = None
+                    logo_scale = 1.0
+                else:
+                    card = make_dark_text_card(
+                        slide["headline"],
+                        slide["body"],
+                        slide_number,
+                        brand_name=self._cfg.brand_name,
+                        brand_tagline=self._cfg.brand_tagline,
+                    )
+                    logo_corner = "top_right"
+                    logo_scale = 1.625
+
+                # Brand logo overlay.
                 # crop_bars=False: text cards have uniform dark margins that the
                 # hallucinated-bar cropper would wrongly strip (clipping the tagline).
+                # Scene covers are already square-cropped so bars cannot appear either.
                 final_bytes = add_brand_overlay(
                     card,
                     self._cfg.brand_name,
                     self._cfg.brand_tagline,
-                    corner="top_right",
+                    corner=logo_corner,
                     crop_bars=False,
-                    logo_scale=1.625,  # ~260px on a 1080 card — keeps the subtitle crisp
+                    logo_scale=logo_scale,
                 )
 
                 image_url = self._upload(carousel_id, i, final_bytes)

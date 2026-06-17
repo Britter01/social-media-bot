@@ -44,10 +44,12 @@ def test_only_needs_anthropic_key(base_config):
 
 
 def test_creates_exactly_four_text_slides(base_config):
+    """When scene cover is unavailable (returns None), all 4 slides are dark text cards."""
     agent = _agent(base_config)
     source = Post(pillar="Productivity", platform="instagram", topic="focus habits")
 
     with (
+        patch("agents.carousel_agent._make_scene_cover", return_value=None),
         patch("core.image_utils.add_brand_overlay", side_effect=lambda b, *a, **kw: b),
         patch("core.image_utils.make_dark_text_card", return_value=b"\x89PNG-card") as mk,
     ):
@@ -57,11 +59,26 @@ def test_creates_exactly_four_text_slides(base_config):
     assert len(carousel.slides) == 4
     roles = [s["role"] for s in carousel.slides]
     assert roles == ["cover", "content", "content", "cta"]
-    # Every slide has an uploaded image URL.
     assert all(s["image_url"].startswith("https://cdn.example/") for s in carousel.slides)
     assert carousel.thumbnail_url == carousel.slides[0]["image_url"]
-    # Only text cards are rendered — no image-generation calls.
-    assert mk.call_count == 4
+    assert mk.call_count == 4  # all 4 slides fall back to dark text card
+
+
+def test_scene_cover_used_for_slide_zero(base_config):
+    """When scene cover succeeds, slide 0 uses the scene photo; slides 1-3 use text cards."""
+    agent = _agent(base_config)
+    source = Post(pillar="Productivity", platform="instagram", topic="focus habits")
+
+    scene_bytes = b"\x89PNG-scene"
+    with (
+        patch("agents.carousel_agent._make_scene_cover", return_value=scene_bytes),
+        patch("core.image_utils.add_brand_overlay", side_effect=lambda b, *a, **kw: b),
+        patch("core.image_utils.make_dark_text_card", return_value=b"\x89PNG-card") as mk,
+    ):
+        carousel = agent.create_from_post(source)
+
+    assert len(carousel.slides) == 4
+    assert mk.call_count == 3  # slides 1, 2, 3 only — slide 0 uses scene cover
 
 
 def test_trims_extra_value_slides_to_two(base_config):
