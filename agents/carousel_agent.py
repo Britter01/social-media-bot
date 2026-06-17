@@ -1,21 +1,21 @@
-"""Carousel agent — multi-slide post generator for Instagram and Facebook.
+"""Carousel agent — text-based multi-slide post generator for Instagram and Facebook.
 
-Creates a structured carousel post from a topic in two steps:
+Creates a structured **4-slide, text-only** carousel from a topic in two steps:
   1. Claude Sonnet plans the carousel: format, slide headlines and body copy.
-  2. Slides are rendered using a mix of Imagen photos and pure dark brand
-     text cards, assembled with Pillow.
+  2. Every slide is rendered as a polished dark brand text card with Pillow.
 
-Slide design:
-  Cover (slide 0)  — Imagen photo + gradient + bold headline (make_cover_card)
-  Content slides   — alternate between:
-                       dark brand text card (odd-numbered content: 01, 03 …)
-                       Imagen photo + text strip (even-numbered content: 02, 04 …)
-  CTA (last slide) — dark brand text card (no Imagen)
+Slide layout (always exactly 4 slides):
+  Slide 1 — Cover / hook   (dark text card, no slide number)
+  Slide 2 — Value point 1  (dark text card, numbered 01)
+  Slide 3 — Value point 2  (dark text card, numbered 02)
+  Slide 4 — CTA            (dark text card, no slide number)
 
-This alternating pattern creates visual rhythm while keeping Imagen calls to
-a minimum (~half the slides), reduces the risk of AI-hallucinated text inside
-photos, and produces a clean, premium-editorial look consistent with top
-Instagram carousels.
+Why text-only: AI image generation (Imagen / Higgsfield) was the single biggest
+source of failures — quota 429s, hallucinated on-image text, upload errors — and
+when it failed the pipeline fell back to single-image "standard" posts. Carousels
+here need NO image generation at all: the dark brand cards are pure deterministic
+Pillow rendering, so a carousel can never fail to produce its slides. This makes
+Instagram/Facebook output reliable and on-brand every time.
 
 Supported formats (the model picks the best fit for the topic):
   tips      — "5 tips for doing X"
@@ -28,8 +28,7 @@ The returned Post has post_type='carousel' and slides=[{headline, body,
 image_url, role}].  thumbnail_url is set to the cover slide image so the
 dashboard preview works.
 
-Model choice: Sonnet for copy (judgment + brand voice); Imagen Standard for
-photos (better instruction-following than Fast, especially the no-text rule).
+Model choice: Sonnet for copy (judgment + brand voice). No image model needed.
 """
 
 from __future__ import annotations
@@ -44,91 +43,32 @@ from core.models import Post, PostStatus
 
 logger = logging.getLogger(__name__)
 
-
-def _is_quota_error(exc: Exception) -> bool:
-    """Return True if *exc* looks like an Imagen quota / rate-limit error.
-
-    Google's genai client raises various error types; rather than match on a
-    specific class we look for the tell-tale 429 / RESOURCE_EXHAUSTED / quota
-    markers in the string form, which is stable across client versions.
-    """
-    text = str(exc).lower()
-    return any(
-        marker in text
-        for marker in ("429", "resource_exhausted", "quota", "rate limit", "exceeded")
-    )
-
-
 _FORMATS = "tips | howto | breakdown | compare | myths"
-
-_ASPECT_RATIO = {
-    "instagram": "1:1",
-    "facebook": "1:1",
-    "twitter": "16:9",
-    "linkedin": "1:1",
-}
-
-# Imagen prompt prefix — purely visual, no topic text that Imagen might render as letters
-_IMG_PREFIX = (
-    "Editorial lifestyle photograph. "
-    "Clean minimal composition, soft natural light, modern technology in a beautifully "
-    "lived-in space, warm and confident mood, high detail. "
-    "ABSOLUTE RULE — zero text of any kind: no letters, words, numbers, titles, "
-    "labels, signs, watermarks, logos, or any readable characters anywhere — "
-    "not even partially visible, reflected, or blurred. "
-    "Device screens show only abstract bokeh or ambient glow, never UI or text. "
-    "Do not depict any written language anywhere. "
-)
 
 
 class CarouselSlide(BaseModel):
     headline: str = Field(description="Bold, punchy slide headline — max 8 words.")
     body: str = Field(description="1-2 supporting sentences. Conversational, not corporate.")
-    image_prompt: str = Field(
-        description=(
-            "Visual scene for slides that use a photo background — describe the setting, "
-            "mood, and subject using only spatial and sensory language. "
-            "No text, logos, or overlay graphics. "
-            "This will be prefixed with a strict no-text instruction."
-        )
-    )
 
 
 class CarouselPlan(BaseModel):
     format_type: str = Field(description=f"One of: {_FORMATS}")
     cover_headline: str = Field(description="The carousel title/hook — max 10 words.")
     cover_subtext: str = Field(description="One-sentence teaser shown below the cover headline.")
-    cover_image_prompt: str = Field(description="Visual direction for the cover slide photo.")
     slides: list[CarouselSlide] = Field(
-        description="4–6 content slides. Each builds on the cover hook."
+        description="Exactly 2 value slides. Each delivers one concrete, useful point."
     )
     cta_headline: str = Field(description="Final slide headline — prompt an action or reflection.")
     cta_body: str = Field(description="One sentence CTA. Warm, not pushy.")
 
 
 class CarouselAgent:
-    """Generates a multi-slide carousel post from a regular Post's topic."""
+    """Generates a 4-slide, text-only carousel post from a regular Post's topic."""
 
     def __init__(self, cfg: Config = config) -> None:
         cfg.require("anthropic_api_key")
-        if not cfg.higgsfield_api_key and not cfg.google_api_key:
-            raise ValueError(
-                "CarouselAgent needs HIGGSFIELD_API_KEY or GOOGLE_API_KEY for photo slides"
-            )
         self._cfg = cfg
         self._client = anthropic.Anthropic(api_key=cfg.anthropic_api_key)
-
-        # Imagen client — only built when the key is present.
-        self._genai_client = None
-        self._genai = None
-        if cfg.google_api_key:
-            try:
-                from google import genai
-
-                self._genai_client = genai.Client(api_key=cfg.google_api_key)
-                self._genai = genai
-            except Exception:
-                logger.warning("Could not init Imagen client for carousel", exc_info=True)
 
         self._storage = None
         if cfg.supabase_url and cfg.supabase_key:
@@ -143,14 +83,15 @@ class CarouselAgent:
         """Generate a carousel Post from an existing post's topic and pillar.
 
         Returns a new Post (different id) with post_type='carousel' and
-        slides populated. The source post is not modified.
-        Pass ``quality_agent`` to run per-slide QC before uploading.
+        slides populated. The source post is not modified. ``quality_agent``
+        is accepted for call-site compatibility but is not used: the slides are
+        deterministic brand text cards with no AI photo to QC.
         """
         import uuid as _uuid
 
         carousel_id = str(_uuid.uuid4())
         plan = self._plan_carousel(source)
-        slides_data = self._generate_slides(carousel_id, source, plan, quality_agent=quality_agent)
+        slides_data = self._generate_slides(carousel_id, source, plan)
 
         carousel = Post(
             id=carousel_id,
@@ -166,7 +107,7 @@ class CarouselAgent:
         )
         carousel.mark(PostStatus.MEDIA_READY)
         logger.info(
-            "Created carousel post %s (%s/%s) with %d slides",
+            "Created text carousel post %s (%s/%s) with %d slides",
             carousel.id,
             carousel.pillar,
             carousel.platform,
@@ -177,7 +118,7 @@ class CarouselAgent:
     # --- Internals -----------------------------------------------------------
 
     def _plan_carousel(self, post: Post) -> CarouselPlan:
-        """Ask Claude to plan the carousel format and slide copy."""
+        """Ask Claude to plan the 4-slide carousel format and slide copy."""
         import json
 
         system = (
@@ -185,35 +126,31 @@ class CarouselAgent:
             f"founded by {self._cfg.brand_founder}. "
             f'Tagline: "{self._cfg.brand_tagline}". '
             "Voice: clear, confident, warm. Never patronising. Short sentences. "
-            "You are planning a carousel post — a swipeable series of slides. "
-            "Each slide should give genuine value. Avoid filler. "
-            "Make the cover slide impossible to scroll past. "
+            "You are planning a swipeable carousel of exactly 4 text slides: "
+            "a cover hook, two value slides, and a closing call-to-action. "
+            "Every slide must earn its swipe — concrete value, no filler. "
+            "Make the cover impossible to scroll past. "
             "Respond with a valid JSON object ONLY — no markdown, no explanation."
         )
         prompt = (
-            f"Plan a carousel post for the '{post.pillar}' pillar on {post.platform.upper()}.\n"
+            f"Plan a 4-slide carousel for the '{post.pillar}' pillar on {post.platform.upper()}.\n"
             f"Topic: {post.topic}\n\n"
             f"Choose the best format for this topic ({_FORMATS}). "
-            "Return 4-6 content slides (not counting cover and CTA). "
-            "Each slide needs a headline, body copy, and an image direction — "
-            "describe a real-world scene or visual metaphor that suits the slide, "
-            "no text overlays, no infographic styles, no logos or brand names in the scene. "
-            "Note: most content slides will be rendered as dark text cards (no photo), "
-            "so image_prompt is only used for alternating photo slides — keep descriptions "
-            "atmospheric and spatial rather than concept-driven.\n\n"
+            "Return EXACTLY 2 value slides (the cover and CTA are separate fields). "
+            "Each value slide needs a punchy headline and 1-2 sentences of useful copy. "
+            "These render as text cards — no images — so make the words carry the value.\n\n"
             "Return a JSON object with exactly these fields:\n"
             '{"format_type": "one of: tips|howto|breakdown|compare|myths", '
             '"cover_headline": "max 10 words", '
             '"cover_subtext": "one-sentence teaser", '
-            '"cover_image_prompt": "visual direction, no text/logos", '
-            '"slides": [{"headline": "max 8 words", "body": "1-2 sentences", '
-            '"image_prompt": "atmospheric scene, no text"}], '
+            '"slides": [{"headline": "max 8 words", "body": "1-2 sentences"}, '
+            '{"headline": "max 8 words", "body": "1-2 sentences"}], '
             '"cta_headline": "action or reflection prompt", '
             '"cta_body": "one warm sentence"}'
         )
         response = self._client.messages.create(
             model=self._cfg.model_creative,
-            max_tokens=2000,
+            max_tokens=1500,
             system=system,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -230,203 +167,62 @@ class CarouselAgent:
                 f"Claude returned invalid JSON: {exc}\nRaw response: {text[:300]}"
             ) from exc
         plan = CarouselPlan.model_validate(data)
+        # Enforce exactly 2 value slides so we always produce a 4-slide carousel.
+        if len(plan.slides) > 2:
+            plan.slides = plan.slides[:2]
+        elif len(plan.slides) < 2:
+            raise RuntimeError(f"Carousel plan returned {len(plan.slides)} value slides, need 2")
         logger.info(
-            "Planned carousel '%s' (%s, %d slides)",
+            "Planned text carousel '%s' (%s, 4 slides)",
             plan.cover_headline,
             plan.format_type,
-            len(plan.slides),
         )
         return plan
 
-    def _generate_slides(
-        self, carousel_id: str, post: Post, plan: CarouselPlan, quality_agent=None
-    ) -> list[dict]:
-        """Render all slides and return slide dicts ready for the Post model.
+    def _generate_slides(self, carousel_id: str, post: Post, plan: CarouselPlan) -> list[dict]:
+        """Render the 4 text slides and return slide dicts ready for the Post model.
 
-        Slide layout:
-          Index 0             — cover photo (Imagen + make_cover_card)
-          Content odd (1,3…)  — dark text card (make_dark_text_card, no image gen)
-          Content even (2,4…) — photo text card (Higgsfield/Imagen + make_photo_text_card)
-          Last index          — CTA dark card (make_dark_text_card, no image gen)
+        Layout:
+          index 0 — cover hook   (no slide number)
+          index 1 — value 01     (numbered 01)
+          index 2 — value 02     (numbered 02)
+          index 3 — CTA          (no slide number)
 
-        Photo slides try Higgsfield first (when HIGGSFIELD_API_KEY is set),
-        then fall back to Imagen.  If all image generation is exhausted (quota)
-        every remaining slide is rendered as a text-only dark brand card so the
-        carousel always completes.
+        Every slide is a deterministic dark brand text card — no image
+        generation, so this never fails for lack of a photo.
         """
-        from core.image_utils import (
-            add_brand_overlay,
-            make_cover_card,
-            make_dark_text_card,
-            make_photo_text_card,
-        )
+        from core.image_utils import add_brand_overlay, make_dark_text_card
 
-        aspect_ratio = _ASPECT_RATIO.get(post.platform, "1:1")
-
-        # Flat list: cover → content… → cta
+        # Flat list: cover → value 1 → value 2 → cta
         all_slides = [
-            {
-                "headline": plan.cover_headline,
-                "body": plan.cover_subtext,
-                "image_prompt": _IMG_PREFIX + plan.cover_image_prompt,
-                "role": "cover",
-            }
+            {"headline": plan.cover_headline, "body": plan.cover_subtext, "role": "cover"},
+            {"headline": plan.slides[0].headline, "body": plan.slides[0].body, "role": "content"},
+            {"headline": plan.slides[1].headline, "body": plan.slides[1].body, "role": "content"},
+            {"headline": plan.cta_headline, "body": plan.cta_body, "role": "cta"},
         ]
-        for s in plan.slides:
-            all_slides.append(
-                {
-                    "headline": s.headline,
-                    "body": s.body,
-                    "image_prompt": _IMG_PREFIX + s.image_prompt,
-                    "role": "content",
-                }
-            )
-        all_slides.append(
-            {
-                "headline": plan.cta_headline,
-                "body": plan.cta_body,
-                "image_prompt": "",  # CTA never uses Imagen
-                "role": "cta",
-            }
-        )
 
         result: list[dict] = []
-        content_count = 0  # 1-based counter for numbered slides
-        # Once Imagen reports its quota/rate is exhausted there is no point
-        # retrying it on every remaining slide — each call just costs a network
-        # round-trip and another 429. Flip this flag on the first quota error
-        # and render the rest of the carousel as text-only dark brand cards so
-        # the post still completes (carousels keep flowing when Imagen is down).
-        imagen_exhausted = False
-
+        content_count = 0
         for i, slide in enumerate(all_slides):
-            role = slide["role"]
             try:
+                role = slide["role"]
                 if role == "content":
                     content_count += 1
-                    slide_number = content_count
-                    use_photo = content_count % 2 == 0  # 01=dark, 02=photo, 03=dark …
-                elif role == "cover":
-                    slide_number = None
-                    use_photo = True
-                else:  # cta
-                    slide_number = None
-                    use_photo = False
-
-                if imagen_exhausted:
-                    use_photo = False
-
-                # Generate photo for slides that need one.
-                # Priority: Higgsfield Soul → Imagen → dark text card.
-                raw_bytes: bytes | None = None
-                if use_photo:
-                    # 1. Try Higgsfield
-                    if self._cfg.higgsfield_api_key:
-                        try:
-                            raw_bytes = self._generate_higgsfield_image(
-                                slide["image_prompt"], aspect_ratio
-                            )
-                        except Exception as exc:
-                            logger.warning(
-                                "Higgsfield failed for slide %d (%s); trying Imagen", i, exc
-                            )
-
-                    # 2. Try Imagen if Higgsfield didn't work
-                    if raw_bytes is None and self._genai_client:
-                        try:
-                            from google.genai import types as _gtypes
-
-                            response = self._genai_client.models.generate_images(
-                                model=self._cfg.imagen_model,
-                                prompt=slide["image_prompt"],
-                                config=_gtypes.GenerateImagesConfig(
-                                    number_of_images=1,
-                                    aspect_ratio=aspect_ratio,
-                                ),
-                            )
-                            images = getattr(response, "generated_images", None) or []
-                            if images:
-                                raw_bytes = images[0].image.image_bytes
-                            else:
-                                logger.warning("Imagen returned no image for slide %d", i)
-                        except Exception as exc:
-                            logger.exception("Imagen failed for slide %d; using dark card", i)
-                            if _is_quota_error(exc):
-                                logger.warning(
-                                    "Imagen quota exhausted (slide %d) — remaining slides "
-                                    "will be text-only dark cards",
-                                    i,
-                                )
-                                imagen_exhausted = True
-
-                    if raw_bytes is None:
-                        use_photo = False
-
-                # Render the slide
-                if role == "cover" and raw_bytes:
-                    card = make_cover_card(raw_bytes, slide["headline"], slide["body"])
-                elif use_photo and raw_bytes:
-                    card = make_photo_text_card(
-                        raw_bytes, slide["headline"], slide["body"], slide_number
-                    )
+                    slide_number = content_count  # 01, 02
                 else:
-                    # Dark text card — no Imagen needed
-                    card = make_dark_text_card(
-                        slide["headline"],
-                        slide["body"],
-                        slide_number,
-                        brand_name=self._cfg.brand_name,
-                        brand_tagline=self._cfg.brand_tagline,
-                    )
+                    slide_number = None  # cover and CTA show no number
 
-                # Brand logo overlay on every slide. Force the top-right corner:
-                # all slide text sits in the lower half, so a fixed top-right
-                # placement guarantees the logo never lands on top of the copy.
+                card = make_dark_text_card(
+                    slide["headline"],
+                    slide["body"],
+                    slide_number,
+                    brand_name=self._cfg.brand_name,
+                    brand_tagline=self._cfg.brand_tagline,
+                )
+                # Brand logo overlay, forced top-right (all copy sits lower-half).
                 final_bytes = add_brand_overlay(
                     card, self._cfg.brand_name, self._cfg.brand_tagline, corner="top_right"
                 )
-
-                # QC check
-                if quality_agent is not None:
-                    from agents.quality_agent import QualityError
-
-                    try:
-                        quality_agent.check_image_bytes(post, final_bytes, label=f"slide {i}")
-                    except QualityError as exc:
-                        # A photo slide can fail QC if Imagen hallucinated text
-                        # into the photo. Rather than drop the slide (which
-                        # leaves the carousel short of pages), re-render it as a
-                        # text-only dark card — no photo means no hallucination
-                        # risk — and keep it.
-                        if role != "cta" and (role == "cover" or use_photo):
-                            logger.warning(
-                                "QC: slide %d failed (%s) — falling back to dark text card", i, exc
-                            )
-                            card = make_dark_text_card(
-                                slide["headline"],
-                                slide["body"],
-                                slide_number,
-                                brand_name=self._cfg.brand_name,
-                                brand_tagline=self._cfg.brand_tagline,
-                            )
-                            final_bytes = add_brand_overlay(
-                                card,
-                                self._cfg.brand_name,
-                                self._cfg.brand_tagline,
-                                corner="top_right",
-                            )
-                            try:
-                                quality_agent.check_image_bytes(
-                                    post, final_bytes, label=f"slide {i} (fallback)"
-                                )
-                            except QualityError as exc2:
-                                logger.warning(
-                                    "QC: fallback slide %d also failed (%s) — skipping", i, exc2
-                                )
-                                continue
-                        else:
-                            logger.warning("QC: slide %d failed (%s) — skipping", i, exc)
-                            continue
 
                 image_url = self._upload(carousel_id, i, final_bytes)
                 result.append(
@@ -437,68 +233,11 @@ class CarouselAgent:
                         "role": role,
                     }
                 )
-                logger.debug("Rendered carousel slide %d (%s) for post %s", i, role, post.id)
-
+                logger.debug("Rendered text slide %d (%s) for post %s", i, role, post.id)
             except Exception:
                 logger.exception("Failed rendering slide %d of post %s", i, post.id)
 
         return result
-
-    def _generate_higgsfield_image(self, prompt: str, aspect_ratio: str) -> bytes:
-        """Generate a slide image via Higgsfield Soul REST API.
-
-        Same submit→poll flow as ThumbnailAgent._generate_higgsfield, but
-        accepts a raw prompt string and aspect_ratio directly so it can be
-        shared across cover and photo content slides.
-        """
-        import time
-
-        import requests as _req
-
-        api_key = self._cfg.higgsfield_api_key
-        headers = {
-            "Authorization": f"Key {api_key}",
-            "Content-Type": "application/json",
-        }
-
-        resp = _req.post(
-            "https://platform.higgsfield.ai/v1/text2image/soul",
-            headers=headers,
-            json={
-                "prompt": prompt,
-                "aspect_ratio": aspect_ratio,
-                "quality": "HD",
-                "batch_size": "SINGLE",
-            },
-            timeout=30,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        request_id = data.get("request_id") or data.get("id")
-        if not request_id:
-            raise RuntimeError(f"Higgsfield did not return a request_id: {data}")
-
-        poll_url = f"https://platform.higgsfield.ai/requests/{request_id}/status"
-        deadline = time.time() + 300
-        interval = 2
-        while time.time() < deadline:
-            time.sleep(interval)
-            interval = min(interval * 1.5, 10)
-            status_resp = _req.get(poll_url, headers=headers, timeout=15)
-            status_resp.raise_for_status()
-            status_data = status_resp.json()
-            status = status_data.get("status", "")
-            if status == "completed":
-                images = status_data.get("images") or []
-                if not images:
-                    raise RuntimeError("Higgsfield completed but returned no images")
-                image_url = images[0].get("url") or images[0]
-                img_resp = _req.get(image_url, timeout=30)
-                img_resp.raise_for_status()
-                return img_resp.content
-            if status in ("failed", "nsfw"):
-                raise RuntimeError(f"Higgsfield generation {status}: {status_data}")
-        raise RuntimeError("Higgsfield timed out after 5 minutes")
 
     def _upload(self, post_id: str, slide_index: int, image_bytes: bytes) -> str:
         """Upload slide image to Supabase; return public URL or local path."""

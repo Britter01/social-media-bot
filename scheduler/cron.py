@@ -117,7 +117,7 @@ def run_content_pipeline() -> str:
     if no_image:
         reasons = []
         if carousel_agent is None:
-            reasons.append("carousel agent unavailable — check GOOGLE_API_KEY in Railway")
+            reasons.append("carousel agent unavailable — check ANTHROPIC_API_KEY in Railway")
         if thumbnail_agent is None:
             reasons.append("thumbnail agent unavailable — check GOOGLE_API_KEY in Railway")
         if not reasons:
@@ -264,7 +264,7 @@ def _finalise_posts(
     if no_image:
         reasons = []
         if carousel_agent is None:
-            reasons.append("carousel agent unavailable — check GOOGLE_API_KEY in Railway")
+            reasons.append("carousel agent unavailable — check ANTHROPIC_API_KEY in Railway")
         if thumbnail_agent is None:
             reasons.append("thumbnail agent unavailable — check GOOGLE_API_KEY in Railway")
         if not reasons:
@@ -279,37 +279,27 @@ def _finalise_posts(
 def _apply_media(post: Post, thumbnail_agent, video_agent, quality_agent, carousel_agent) -> None:
     """Assign media to *post* in place.
 
-    Instagram and Facebook always get a carousel — see carousel_agent.py for
-    the slide design (cover photo + alternating dark cards / photo strips).
-    If the carousel agent is unavailable or fails, falls back to a single image.
+    Instagram and Facebook are **carousel-only**: they always get a 4-slide
+    text-based carousel and never fall back to a single-image "standard" post.
+    If the carousel can't be built the failure propagates so the caller marks
+    the post FAILED — we never publish an off-brand single-image post on IG/FB.
     All other platforms get a single image or video via _generate_media.
-
-    Raises QualityError (from the single-image path) so callers can handle
-    QC failures the same way regardless of which branch ran.
     """
-    from agents.quality_agent import QualityError
-
-    if post.platform in _CAROUSEL_PLATFORMS and carousel_agent:
-        try:
-            carousel = carousel_agent.create_from_post(post, quality_agent=quality_agent)
-            if not carousel.slides:
-                raise RuntimeError("carousel returned 0 slides")
-            post.post_type = carousel.post_type
-            post.slides = carousel.slides
-            post.thumbnail_url = carousel.thumbnail_url
-            post.title = carousel.title or post.title
-            post.caption = carousel.caption or post.caption
-            post.mark(PostStatus.MEDIA_READY)
-            return
-        except QualityError:
-            raise  # propagate so the caller can mark the post failed
-        except Exception as exc:
-            logger.exception(
-                "Carousel failed for post %s (%s); falling back to single image",
-                post.id,
-                post.platform,
+    if post.platform in _CAROUSEL_PLATFORMS:
+        if not carousel_agent:
+            raise RuntimeError(
+                "carousel agent unavailable for IG/FB — check ANTHROPIC_API_KEY in Railway"
             )
-            _append_error(post, f"carousel: {type(exc).__name__}: {str(exc)[:300]}")
+        carousel = carousel_agent.create_from_post(post, quality_agent=quality_agent)
+        if not carousel.slides:
+            raise RuntimeError("carousel returned 0 slides")
+        post.post_type = carousel.post_type
+        post.slides = carousel.slides
+        post.thumbnail_url = carousel.thumbnail_url
+        post.title = carousel.title or post.title
+        post.caption = carousel.caption or post.caption
+        post.mark(PostStatus.MEDIA_READY)
+        return
 
     _generate_media(post, thumbnail_agent, video_agent, quality_agent)
 
