@@ -669,6 +669,45 @@ def run_diagnostics() -> str:
     except Exception as exc:
         parts.append(f"storage FAILED ({str(exc)[:80]})")
 
+    # 3b. END-TO-END media test — the steps the pipeline actually runs but the
+    # checks above never exercised: a real Imagen generation call, Pillow slide
+    # rendering, and the brand overlay. This is what pinpoints why every post
+    # comes out with no image even though the agents init fine.
+    media_parts: list[str] = []
+    test_post = Post(
+        pillar="AI Guide", platform="instagram", topic="diagnostic", title="Diagnostic"
+    )
+
+    # Imagen generation (the real API credit — often fails on free-tier keys
+    # where billing isn't enabled, even though the client constructs fine).
+    try:
+        from agents.thumbnail_agent import ThumbnailAgent
+
+        ta = ThumbnailAgent()
+        raw = ta.generate_raw(test_post)
+        media_parts.append(f"imagen OK ({len(raw) // 1024}kb)")
+    except Exception as exc:
+        media_parts.append(f"imagen FAILED ({str(exc)[:110]})")
+
+    # Pillow slide render + brand overlay (no Imagen needed — if THIS fails,
+    # even the dark-card carousel fallback produces zero slides).
+    try:
+        from core.image_utils import add_brand_overlay, make_dark_text_card
+
+        card = make_dark_text_card(
+            "Diagnostic",
+            "Render test",
+            1,
+            brand_name=config.brand_name,
+            brand_tagline=config.brand_tagline,
+        )
+        final = add_brand_overlay(card, config.brand_name, config.brand_tagline, corner="top_right")
+        media_parts.append(f"render OK ({len(final) // 1024}kb)")
+    except Exception as exc:
+        media_parts.append(f"render FAILED ({str(exc)[:110]})")
+
+    parts.append("; ".join(media_parts))
+
     # 4. Posts-table schema + what recent posts ACTUALLY saved. Selecting
     # post_type/slides also proves those columns exist — if they don't, every
     # carousel save silently fails and this read errors with the column name.
