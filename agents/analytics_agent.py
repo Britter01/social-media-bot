@@ -284,12 +284,15 @@ class AnalyticsAgent:
     def _fetch_facebook(self, platform_post_id: str) -> dict | None:
         """Fetch Facebook post engagement via the Graph API.
 
-        Two sources are combined for robustness (mirroring the Instagram path):
-          1. The post node itself — ``reactions.summary``, ``comments.summary``
-             and ``shares``. These are plain fields, not insights metrics, so
-             they work with ``pages_read_engagement`` and never trip the
-             "(#100) must be a valid insights metric" error.
-          2. The insights endpoint for ``post_impressions`` — best-effort, with
+        Three sources are combined for robustness (mirroring the Instagram path):
+          1. The post node — ``reactions.summary`` and ``comments.summary``.
+             These plain fields exist on BOTH feed posts and photo objects, so
+             they work whether the post was published via /feed or /photos.
+          2. The ``shares`` field — requested separately and best-effort,
+             because photo objects (posts published via /photos) have no
+             ``shares`` field and the Graph API rejects the *whole* request if
+             any requested field is invalid.
+          3. The insights endpoint for ``post_impressions`` — best-effort, with
              progressive fallback. Insights metric names change often and the
              Graph API rejects the *whole* request if any single metric is
              invalid, so a failure here never discards the node counts.
@@ -303,13 +306,13 @@ class AnalyticsAgent:
         metrics: dict[str, Any] = {}
         raw: dict[str, Any] = {}
 
-        # 1. Engagement counts from the post node (reliable, no insights scope).
+        # 1. Reactions + comments from the node (valid on feed posts AND photos).
         try:
             node = requests.get(
                 f"{_GRAPH_BASE}/{platform_post_id}",
                 params={
                     "fields": "reactions.summary(total_count).limit(0),"
-                    "comments.summary(total_count).limit(0),shares",
+                    "comments.summary(total_count).limit(0)",
                     "access_token": token,
                 },
                 timeout=_REQUEST_TIMEOUT,
@@ -319,13 +322,24 @@ class AnalyticsAgent:
             raw["node"] = ndata
             reactions = (ndata.get("reactions") or {}).get("summary") or {}
             comments = (ndata.get("comments") or {}).get("summary") or {}
-            shares = ndata.get("shares") or {}
             metrics["likes"] = _int(reactions.get("total_count"))
             metrics["comments"] = _int(comments.get("total_count"))
-            metrics["shares"] = _int(shares.get("count"))
         except Exception as exc:
             self._last_error = f"Facebook node read: {_graph_error(exc)}"
             logger.warning("Facebook node fetch failed for %s: %s", platform_post_id[:12], exc)
+
+        # 2. Shares — separate best-effort call (absent on photo objects).
+        try:
+            sresp = requests.get(
+                f"{_GRAPH_BASE}/{platform_post_id}",
+                params={"fields": "shares", "access_token": token},
+                timeout=_REQUEST_TIMEOUT,
+            )
+            sresp.raise_for_status()
+            shares = sresp.json().get("shares") or {}
+            metrics["shares"] = _int(shares.get("count"))
+        except Exception as exc:
+            logger.debug("Facebook shares unavailable for %s: %s", platform_post_id[:12], exc)
 
         # 2. Insights — impressions only, best-effort with fallback.
         insights_err: str | None = None
@@ -377,35 +391,34 @@ class AnalyticsAgent:
         return metrics
 
     def _fetch_linkedin(self, platform_post_id: str) -> dict | None:
-        """Fetch LinkedIn share statistics."""
+        """Fetch LinkedIn share statistics — organization pages only.
+
+        LinkedIn only exposes post analytics for **organization (company
+        page)** shares, via ``organizationalEntityShareStatistics`` with the
+        ``r_organization_social`` scope. **Personal-profile** posts have no
+        analytics API: the member-level scope (``r_member_social``) that once
+        allowed reading a member's own social actions is no longer granted to
+        new applications. So for a personal profile there is simply no path to
+        reach/impression/like data — we detect that and skip with a clear,
+        non-actionable message rather than spamming 403s.
+        """
         token = self._cfg.linkedin_access_token
         if not token:
             self._last_error = "LinkedIn: no access token (set LINKEDIN_ACCESS_TOKEN)"
             logger.debug("LinkedIn access token not set; skipping")
             return None
 
-        author_urn = self._cfg.linkedin_author_urn
-        if not author_urn:
-            # Try to derive the author URN from the token (same as the publisher).
-            try:
-                resp = requests.get(
-                    "https://api.linkedin.com/v2/userinfo",
-                    headers={"Authorization": f"Bearer {token}"},
-                    timeout=_REQUEST_TIMEOUT,
-                )
-                resp.raise_for_status()
-                sub = resp.json().get("sub")
-                if sub:
-                    author_urn = f"urn:li:person:{sub}"
-            except Exception:
-                pass
-
-        if not author_urn:
+        # Only organization URNs have an analytics endpoint. A configured
+        # LINKEDIN_AUTHOR_URN of the form urn:li:organization:NNN means a
+        # company page; anything else (or a token that only resolves to a
+        # person) is a personal profile with no analytics API.
+        org_urn = self._cfg.linkedin_author_urn or ""
+        if "urn:li:organization" not in org_urn:
             self._last_error = (
-                "LinkedIn: LINKEDIN_AUTHOR_URN not set and could not be derived from token "
-                "(token may lack openid/profile scope)"
+                "LinkedIn: personal-profile post analytics are not available via the API "
+                "(only company pages expose stats; r_member_social is no longer granted)"
             )
-            logger.debug("LinkedIn author URN not available; skipping analytics")
+            logger.debug("LinkedIn personal profile — no analytics API; skipping")
             return None
 
         try:
@@ -413,7 +426,7 @@ class AnalyticsAgent:
                 "https://api.linkedin.com/v2/organizationalEntityShareStatistics",
                 params={
                     "q": "organizationalEntity",
-                    "organizationalEntity": author_urn,
+                    "organizationalEntity": org_urn,
                     "shares[0]": platform_post_id,
                 },
                 headers={
@@ -425,7 +438,7 @@ class AnalyticsAgent:
             if resp.status_code in (401, 403):
                 self._last_error = (
                     f"LinkedIn: {resp.status_code} "
-                    "(token may lack r_organization_social or r_member_social scope)"
+                    "(token may lack r_organization_social scope for this company page)"
                 )
                 logger.debug(
                     "LinkedIn analytics: %d (token may lack analytics scope)", resp.status_code
