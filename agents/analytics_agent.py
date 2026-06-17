@@ -32,7 +32,10 @@ from core.config import Config, config
 logger = logging.getLogger(__name__)
 
 _ANALYTICS_TABLE = "post_analytics"
-_GRAPH_BASE = "https://graph.facebook.com/v19.0"
+# Keep in step with the publisher (v22.0). Several post_impressions metrics
+# were deprecated on older versions, and a stale version is a common reason
+# Facebook insights silently return nothing while likes/comments still work.
+_GRAPH_BASE = "https://graph.facebook.com/v22.0"
 _REQUEST_TIMEOUT = 10
 
 
@@ -51,6 +54,11 @@ class AnalyticsAgent:
         self._stored = 0
         self._errors: list[str] = []
         self._last_error: str | None = None
+        # Partial failures: a fetch that stored *something* (e.g. likes) but
+        # could not get other metrics (e.g. Facebook views). These don't block
+        # the row, but we surface them so a "likes but no views" case isn't
+        # silently invisible.
+        self._warnings: list[str] = []
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -64,6 +72,11 @@ class AnalyticsAgent:
             parts.append("; ".join(f"{msg} (x{n})" for msg, n in top))
         elif self._stored == 0:
             parts.append("no metrics returned (check platform tokens/permissions)")
+        # Always surface partial-failure warnings (e.g. likes stored but views
+        # could not be fetched) so a "likes but no views" case is explained.
+        if self._warnings:
+            top = Counter(self._warnings).most_common(2)
+            parts.append("partial: " + "; ".join(f"{msg} (x{n})" for msg, n in top))
         return " — ".join(parts)
 
     def _record(self, post_id: str, platform: str, metrics: dict | None) -> bool:
@@ -449,7 +462,12 @@ class AnalyticsAgent:
                     "pages_read_engagement and the id is a real page-post id)"
                 )
             return None
-        # Got at least node-level engagement — clear any insights-only error.
+        # Got at least node-level engagement. If views/impressions specifically
+        # could not be fetched, record a *warning* (the row still stores) so the
+        # "likes but no views" case is visible rather than silently swallowed.
+        got_views = any(metrics.get(k) is not None for k in ("impressions", "reach", "video_views"))
+        if not got_views and insights_err:
+            self._warnings.append(insights_err)
         self._last_error = None
         return metrics
 
