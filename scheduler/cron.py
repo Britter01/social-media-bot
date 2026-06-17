@@ -610,6 +610,70 @@ def run_analytics() -> str | None:
         return f"run failed: {exc}"
 
 
+def run_diagnostics() -> str:
+    """Self-check the worker's runtime environment and return a report.
+
+    Runs inside the worker process (which has its OWN Railway environment
+    variables, separate from the dashboard) so the report reflects exactly
+    what the pipeline can and cannot do. Checks, in order:
+
+      * which API keys are present (values never shown),
+      * whether each media agent can initialise (the real reason posts come
+        out without images is almost always an agent failing to start here),
+      * whether a tiny test object can be written to Supabase Storage.
+
+    The result is a single line surfaced on the dashboard Pipeline tab.
+    """
+    logger.info("=== Diagnostics starting ===")
+    parts: list[str] = []
+
+    # 1. Config presence (never reveal the actual secret values).
+    keys = {
+        "ANTHROPIC_API_KEY": bool(config.anthropic_api_key),
+        "GOOGLE_API_KEY": bool(config.google_api_key),
+        "SUPABASE_URL": bool(config.supabase_url),
+        "SUPABASE_KEY": bool(config.supabase_key),
+    }
+    missing = [k for k, present in keys.items() if not present]
+    parts.append("keys missing: " + (", ".join(missing) if missing else "none"))
+
+    # 2. Agent initialisation — the usual culprit for "No image yet".
+    agent_status: list[str] = []
+    try:
+        from agents.thumbnail_agent import ThumbnailAgent
+
+        ThumbnailAgent()
+        agent_status.append("thumbnail OK")
+    except Exception as exc:
+        agent_status.append(f"thumbnail FAILED ({str(exc)[:80]})")
+    try:
+        from agents.carousel_agent import CarouselAgent
+
+        CarouselAgent()
+        agent_status.append("carousel OK")
+    except Exception as exc:
+        agent_status.append(f"carousel FAILED ({str(exc)[:80]})")
+    parts.append("; ".join(agent_status))
+
+    # 3. Storage write test — confirms the 'media' bucket is usable.
+    try:
+        from core.storage import get_storage
+
+        storage = get_storage()
+        url = storage.upload(
+            "diagnostics/healthcheck.txt",
+            b"ok",
+            content_type="text/plain",
+        )
+        parts.append(f"storage OK ({url.split('/')[-1]})")
+    except Exception as exc:
+        parts.append(f"storage FAILED ({str(exc)[:80]})")
+
+    report = " — ".join(parts)
+    logger.info("=== Diagnostics: %s ===", report)
+    return report
+
+
 def run_pending_commands() -> None:
     """Execute any manual pipeline commands queued by the dashboard.
 
@@ -668,6 +732,8 @@ def run_pending_commands() -> None:
                 run_weekly_strategy()
             elif command == "analytics":
                 result_msg = run_analytics()
+            elif command == "diagnostics":
+                result_msg = run_diagnostics()
             else:
                 error = f"Unknown command: {command}"
                 logger.warning("Command queue: %s", error)

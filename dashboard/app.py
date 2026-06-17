@@ -716,6 +716,35 @@ def _render_pipeline_controls(scope: str) -> None:
         except Exception:
             st.error("Failed to queue commands.")
 
+    if st.button(
+        "🩺  System Check",
+        use_container_width=True,
+        help=(
+            "Runs a self-test inside the worker: which API keys it can see, "
+            "whether the image agents can start, and whether Supabase Storage "
+            "is writable. Use this when posts come out with no image."
+        ),
+        key=f"{scope}_diagnostics",
+    ):
+        try:
+            _queue_command("diagnostics", cooldown_key="diagnostics")
+            st.info("System check queued — the result appears below within ~2 min.")
+        except RuntimeError:
+            pass
+        except Exception:
+            st.error("Failed to queue system check.")
+
+    _diag = load_last_command_status(db, "diagnostics")
+    if _diag:
+        _diag_status = _diag.get("status", "")
+        _diag_msg = _diag.get("error") or ""
+        if _diag_status == "done" and _diag_msg:
+            st.caption(f"🩺 Last system check: {_diag_msg}")
+        elif _diag_status in ("pending", "running"):
+            st.caption("🩺 System check running…")
+        elif _diag_msg:
+            st.caption(f"🩺 Last system check failed: {_diag_msg}")
+
     if st.button("↺  Refresh data now", use_container_width=True, key=f"{scope}_refresh"):
         st.cache_data.clear()
         st.rerun()
