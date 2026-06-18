@@ -918,9 +918,7 @@ def run_diagnostics() -> str:
                             _first = _idata[0]
                             _mname = _first.get("name", "?")
                             _vals = _first.get("values") or []
-                            _val = (
-                                _vals[0].get("value", "?") if _vals else _first.get("value", "?")
-                            )
+                            _val = _vals[0].get("value", "?") if _vals else _first.get("value", "?")
                             parts.append(
                                 f"fb insights OK (page={_page_name}, "
                                 f"{_mname}={_val}, post={_fppid[:12]})"
