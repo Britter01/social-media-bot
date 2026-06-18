@@ -1736,7 +1736,17 @@ body { background:#F5F5F7; color:#1D1D1F; padding:20px; font-size:13px; }
 <div class="row">
   <div class="node" style="min-width:300px">
     <div class="label">Content Agent</div>
-    <div class="sub">Writes the caption, hashtags, and title for each approved topic. Uses Claude Sonnet.</div>
+    <div class="sub">Writes the caption, hashtags, and title for each approved topic. Uses Claude Sonnet 4.6.</div>
+  </div>
+</div>
+
+<div class="row"><div class="arr">↓</div></div>
+
+<!-- Cross-post note -->
+<div class="row">
+  <div class="node gate" style="min-width:340px;max-width:420px">
+    <div class="label" style="font-size:13px">Auto cross-post to Facebook</div>
+    <div class="sub">Every Instagram <b>and</b> LinkedIn topic also spawns a matching Facebook carousel — same caption, so Facebook always gets coverage.</div>
   </div>
 </div>
 
@@ -1744,18 +1754,18 @@ body { background:#F5F5F7; color:#1D1D1F; padding:20px; font-size:13px; }
 
 <!-- Row 4: Platform fork -->
 <div class="row" style="align-items:stretch">
-  <div class="node media" style="max-width:200px">
+  <div class="node media" style="max-width:210px">
     <div class="tag">Instagram · Facebook</div>
     <div class="label">Carousel Agent</div>
-    <div class="sub">Plans 4–6 slides with Claude. Cover photo from Imagen. Numbered text cards for content. CTA card at the end.</div>
+    <div class="sub">Claude Sonnet plans the copy; 4 text slides (cover, 2 value cards, CTA) rendered with Pillow on brand scene backgrounds. No image model — slides can never fail to generate.</div>
   </div>
   <div style="display:flex;align-items:center;padding:0 8px">
     <div style="width:1px;height:60px;background:#E8E8ED"></div>
   </div>
-  <div class="node media" style="max-width:200px">
-    <div class="tag">Twitter · LinkedIn</div>
+  <div class="node media" style="max-width:210px">
+    <div class="tag">Twitter · LinkedIn · YouTube · TikTok</div>
     <div class="label">Thumbnail Agent</div>
-    <div class="sub">Single editorial photo from Imagen. Brand logo composited in quietest corner.</div>
+    <div class="sub">Single editorial photo from Imagen 4 Fast. Brand logo composited in quietest corner. (YouTube/TikTok also get a HeyGen video.)</div>
   </div>
 </div>
 
@@ -1802,7 +1812,11 @@ body { background:#F5F5F7; color:#1D1D1F; padding:20px; font-size:13px; }
     </div>
     <div class="node" style="min-width:0;max-width:none;flex:1;text-align:left;padding:12px 16px">
       <div class="label" style="font-size:13px">Image Refresh  <span style="color:#A1A1A6;font-weight:400;font-size:11px">daily 02:00</span></div>
-      <div class="sub">Regenerates any post that is missing a thumbnail image.</div>
+      <div class="sub">Rebuilds carousel slides (and single thumbnails) for any scheduled or failed post still missing its images.</div>
+    </div>
+    <div class="node" style="min-width:0;max-width:none;flex:1;text-align:left;padding:12px 16px">
+      <div class="label" style="font-size:13px">Analytics  <span style="color:#A1A1A6;font-weight:400;font-size:11px">every 2 hrs</span></div>
+      <div class="sub">Pulls reach, impressions, likes &amp; comments for each post 24 h and 7 d after publish.</div>
     </div>
     <div class="node" style="min-width:0;max-width:none;flex:1;text-align:left;padding:12px 16px">
       <div class="label" style="font-size:13px">Cleanup  <span style="color:#A1A1A6;font-weight:400;font-size:11px">Sunday 03:00</span></div>
@@ -1813,7 +1827,7 @@ body { background:#F5F5F7; color:#1D1D1F; padding:20px; font-size:13px; }
 
 </body></html>"""
 
-    components.html(FLOW_HTML, height=980, scrolling=True)
+    components.html(FLOW_HTML, height=1140, scrolling=True)
 
 # ── Failed alert ──────────────────────────────────────────────────────────────
 
