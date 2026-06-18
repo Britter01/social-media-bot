@@ -102,11 +102,11 @@ _TEXT_NUM = (255, 255, 255, 18)  # giant watermark slide number, barely visible
 # Light brand layouts use off-white background (#F5F5F7), charcoal text, and
 # the accent blue (#0066CC) as the decorative line — matching the brand kit's
 # light-mode section styling.
-_LIGHT_BG = (245, 245, 247)          # #F5F5F7 — off-white (secondary background)
+_LIGHT_BG = (245, 245, 247)  # #F5F5F7 — off-white (secondary background)
 _LIGHT_HEADLINE = (29, 29, 31, 255)  # #1D1D1F — charcoal
-_LIGHT_BODY = (110, 110, 115, 230)   # #6E6E73 — slate
-_LIGHT_NUM = (29, 29, 31, 18)        # charcoal watermark, barely visible
-_LIGHT_ACCENT = (0, 102, 204, 210)   # #0066CC — accent blue
+_LIGHT_BODY = (110, 110, 115, 230)  # #6E6E73 — slate
+_LIGHT_NUM = (29, 29, 31, 18)  # charcoal watermark, barely visible
+_LIGHT_ACCENT = (0, 102, 204, 210)  # #0066CC — accent blue
 _LIGHT_TAGLINE = (161, 161, 166, 255)  # #A1A1A6 — silver
 
 
