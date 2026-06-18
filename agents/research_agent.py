@@ -305,11 +305,11 @@ class ResearchAgent:
                     self._db.insert(post)
                 posts.append(post)
 
-                # Cross-post: if Instagram is the target and Facebook is
-                # configured, create an identical post for Facebook so the
-                # same content reaches both audiences automatically.
+                # Cross-post: Instagram and LinkedIn both get a Facebook twin
+                # so Facebook receives consistent coverage regardless of which
+                # platform the research LLM assigns a topic to.
                 if (
-                    post.platform == Platform.INSTAGRAM.value
+                    post.platform in (Platform.INSTAGRAM.value, Platform.LINKEDIN.value)
                     and Platform.FACEBOOK.value in configured
                 ):
                     fb_post = Post(
