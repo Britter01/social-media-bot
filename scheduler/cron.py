@@ -873,11 +873,18 @@ def run_diagnostics() -> str:
             )
             if _pt_resp.ok:
                 _pt_data = _pt_resp.json()
-                _fb_tok = _pt_data.get("access_token") or _fb_user_tok
+                _derived_tok = _pt_data.get("access_token")
                 _page_name = _pt_data.get("name", "?")[:20]
+                if _derived_tok:
+                    _fb_tok = _derived_tok
+                    _tok_label = "page-token"
+                else:
+                    _fb_tok = _fb_user_tok
+                    _tok_label = "user-token-fallback (pages_show_list missing?)"
             else:
                 _fb_tok = _fb_user_tok
-                _page_name = f"token-err {_pt_resp.status_code}"
+                _tok_label = f"user-token-fallback (HTTP {_pt_resp.status_code})"
+                _page_name = "?"
 
             # Find the most recent real Facebook post to test against.
             from supabase import create_client as _sb2_cls
@@ -925,7 +932,7 @@ def run_diagnostics() -> str:
                             _vals = _first.get("values") or []
                             _val = _vals[0].get("value", "?") if _vals else _first.get("value", "?")
                             parts.append(
-                                f"fb insights OK (page={_page_name}, "
+                                f"fb insights OK (page={_page_name}, tok={_tok_label}, "
                                 f"{_mname}={_val}, post={_fppid[:12]})"
                             )
                             _fb_success = True
@@ -936,9 +943,14 @@ def run_diagnostics() -> str:
                         _fb_tried.append(f"{_mset.split(',')[0]}: {_fb_err(_ie)[:60]}")
 
                 if not _fb_success:
+                    _fail_hint = (
+                        " [likely pages_read_engagement missing]"
+                        if _tok_label == "page-token" and any("(#100)" in t for t in _fb_tried)
+                        else ""
+                    )
                     parts.append(
-                        f"fb insights FAIL (page={_page_name}, post={_fppid[:12]}): "
-                        + "; ".join(_fb_tried)
+                        f"fb insights FAIL (page={_page_name}, tok={_tok_label}, "
+                        f"post={_fppid[:12]}){_fail_hint}: " + "; ".join(_fb_tried)
                     )
             else:
                 parts.append("fb insights: no published Facebook post found yet")
