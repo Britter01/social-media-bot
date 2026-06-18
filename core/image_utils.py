@@ -98,6 +98,17 @@ _TEXT_WHITE = (255, 255, 255, 255)  # #FFFFFF headline
 _TEXT_GRAY = (161, 161, 166, 235)  # #A1A1A6 silver — body copy on dark
 _TEXT_NUM = (255, 255, 255, 18)  # giant watermark slide number, barely visible
 
+# ── Light card colour palette (brand kit) ──────────────────────────────────────
+# Light brand layouts use off-white background (#F5F5F7), charcoal text, and
+# the accent blue (#0066CC) as the decorative line — matching the brand kit's
+# light-mode section styling.
+_LIGHT_BG = (245, 245, 247)          # #F5F5F7 — off-white (secondary background)
+_LIGHT_HEADLINE = (29, 29, 31, 255)  # #1D1D1F — charcoal
+_LIGHT_BODY = (110, 110, 115, 230)   # #6E6E73 — slate
+_LIGHT_NUM = (29, 29, 31, 18)        # charcoal watermark, barely visible
+_LIGHT_ACCENT = (0, 102, 204, 210)   # #0066CC — accent blue
+_LIGHT_TAGLINE = (161, 161, 166, 255)  # #A1A1A6 — silver
+
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
@@ -494,30 +505,54 @@ def make_dark_text_card(
     brand_name: str = "",
     brand_tagline: str = "",
     size: tuple[int, int] = (1080, 1080),
+    theme: str = "dark",
 ) -> bytes:
-    """Dark brand card — used for numbered content slides and the CTA slide.
+    """Brand text card — used for numbered content slides and the CTA slide.
 
-    No Imagen call needed: creates a polished near-black card with a giant
-    watermark slide number, bold headline, and body copy in the brand fonts.
-    The brand logo is applied separately via ``add_brand_overlay``.
-    Returns PNG bytes.
+    ``theme`` selects the colour palette:
+      "dark"  — pure-black background, white headline, silver body (existing look)
+      "light" — off-white (#F5F5F7) background, charcoal headline, slate body,
+                accent-blue decorative line — matching the brand kit light layout.
+
+    No Imagen call needed. The brand logo is applied separately via
+    ``add_brand_overlay``. Returns PNG bytes.
     """
     try:
         from PIL import Image, ImageDraw
     except ImportError:
-        logger.warning("Pillow not installed; cannot create dark text card")
+        logger.warning("Pillow not installed; cannot create text card")
         return b""
 
+    # ── Palette selection ────────────────────────────────────────────────────
+    if theme == "light":
+        bg_rgb = _LIGHT_BG
+        vignette_rgb = (232, 232, 237)  # #E8E8ED smoke — very subtle at top
+        vignette_alpha_max = 22
+        accent_fill = _LIGHT_ACCENT
+        num_fill = _LIGHT_NUM
+        text_headline = _LIGHT_HEADLINE
+        text_body = _LIGHT_BODY
+        text_tagline = _LIGHT_TAGLINE
+    else:
+        bg_rgb = _CARD_BG
+        vignette_rgb = (255, 255, 255)  # white — brightens top edge slightly
+        vignette_alpha_max = 28
+        accent_fill = (255, 255, 255, 70)
+        num_fill = _TEXT_NUM
+        text_headline = _TEXT_WHITE
+        text_body = _TEXT_GRAY
+        text_tagline = (120, 128, 145, 255)
+
     w, h = size
-    img = Image.new("RGBA", (w, h), (*_CARD_BG, 255))
+    img = Image.new("RGBA", (w, h), (*bg_rgb, 255))
 
     # Subtle top-to-transparent vignette so the card isn't completely flat
     grd = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     draw_g = ImageDraw.Draw(grd)
     fade = int(h * 0.35)
     for y in range(fade):
-        alpha = int(28 * (1 - y / fade))
-        draw_g.line([(0, y), (w, y)], fill=(255, 255, 255, alpha))
+        alpha = int(vignette_alpha_max * (1 - y / fade))
+        draw_g.line([(0, y), (w, y)], fill=(*vignette_rgb, alpha))
     img = Image.alpha_composite(img, grd)
 
     draw = ImageDraw.Draw(img)
@@ -528,7 +563,7 @@ def make_dark_text_card(
     line_layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     ImageDraw.Draw(line_layer).line(
         [(pad, int(h * 0.06)), (int(w * 0.20), int(h * 0.06))],
-        fill=(255, 255, 255, 70),
+        fill=accent_fill,
         width=2,
     )
     img = Image.alpha_composite(img, line_layer)
@@ -537,8 +572,7 @@ def make_dark_text_card(
     # Giant watermark slide number — faint, lower-LEFT so it never collides with
     # the brand logo (which is composited top-right). Drawn on its own
     # transparent layer: drawing low-alpha text straight onto the card and then
-    # convert("RGB") would DROP the alpha and render it solid white (the cause
-    # of the over-bright "01" overlapping the logo).
+    # convert("RGB") would DROP the alpha and render it solid.
     if slide_number is not None:
         num_str = f"{slide_number:02d}"
         num_size = max(110, int(h * 0.16))
@@ -550,7 +584,7 @@ def make_dark_text_card(
             (pad, int(h * 0.30) - num_h),
             num_str,
             font=font_num,
-            fill=(255, 255, 255, 28),
+            fill=num_fill,
         )
         img = Image.alpha_composite(img, num_layer)
         draw = ImageDraw.Draw(img)
@@ -593,13 +627,13 @@ def make_dark_text_card(
 
     text_y = int(h * 0.40)
     for line in hl_lines:
-        draw.text((pad, text_y), line, font=font_hl, fill=_TEXT_WHITE)
+        draw.text((pad, text_y), line, font=font_hl, fill=text_headline)
         text_y += hl_line_h
 
     if body_lines:
         text_y += int(body_sz * 0.7)
         for line in body_lines:
-            draw.text((pad, text_y), line, font=font_body, fill=_TEXT_GRAY)
+            draw.text((pad, text_y), line, font=font_body, fill=text_body)
             text_y += body_line_h
 
     # Brand tagline — positioned so its lowest ink (including descenders) sits a
@@ -612,7 +646,7 @@ def make_dark_text_card(
             (pad, h - margin - tbbox[3]),
             brand_tagline,
             font=font_tag,
-            fill=(120, 128, 145),
+            fill=text_tagline,
         )
 
     out = io.BytesIO()

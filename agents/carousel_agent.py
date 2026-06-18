@@ -205,10 +205,14 @@ class CarouselAgent:
           index 2 — value 02     (numbered 02)
           index 3 — CTA          (no slide number)
 
-        Every slide is a deterministic dark brand text card — no image
-        generation, so this never fails for lack of a photo.
+        Carousels alternate between dark and light brand themes so the feed
+        has visual variety. The theme is chosen deterministically from
+        carousel_id so the same post always produces the same look.
         """
         from core.image_utils import add_brand_overlay, make_dark_text_card
+
+        # Alternate dark / light per carousel (50 / 50 split, deterministic).
+        card_theme = "light" if int(carousel_id.replace("-", "")[:8], 16) % 2 == 1 else "dark"
 
         # Flat list: cover → value 1 → value 2 → cta
         all_slides = [
@@ -231,8 +235,8 @@ class CarouselAgent:
 
                 if i == 0:
                     # Slide 0: try a lifestyle scene cover (text warped onto a laptop
-                    # screen mockup). Falls back to dark text card if scenes are missing
-                    # or screen detection fails, so the carousel always has a cover.
+                    # screen mockup). Falls back to themed text card if scenes are
+                    # missing or screen detection fails.
                     card = _make_scene_cover(carousel_id, slide, self._cfg)
                     if card is None:
                         card = make_dark_text_card(
@@ -241,6 +245,7 @@ class CarouselAgent:
                             slide_number,
                             brand_name=self._cfg.brand_name,
                             brand_tagline=self._cfg.brand_tagline,
+                            theme=card_theme,
                         )
                     # Auto-pick quietest corner for the logo on a photo cover
                     logo_corner: str | None = None
@@ -252,6 +257,7 @@ class CarouselAgent:
                         slide_number,
                         brand_name=self._cfg.brand_name,
                         brand_tagline=self._cfg.brand_tagline,
+                        theme=card_theme,
                     )
                     logo_corner = "top_right"
                     logo_scale = 1.625
