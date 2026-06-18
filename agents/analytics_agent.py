@@ -341,9 +341,26 @@ class AnalyticsAgent:
         """
         user_token = self._cfg.instagram_access_token
         token = self._cfg.facebook_page_access_token
+        _using_user_token = False
         if not token:
             if user_token:
-                token = self._facebook_page_token(user_token) or user_token
+                derived = self._facebook_page_token(user_token)
+                if derived:
+                    token = derived
+                else:
+                    # Page token derivation failed — fall back to user token but
+                    # flag it so we can surface a clear warning when insights fail.
+                    # A user token can read post nodes (likes/comments) but the
+                    # /insights endpoint rejects it with (#100), which looks like
+                    # an invalid-metric error rather than a permission error.
+                    token = user_token
+                    _using_user_token = True
+                    logger.warning(
+                        "Facebook: could not derive a page token from the user token "
+                        "(check that the token has pages_show_list permission). "
+                        "Falling back to user token — post node data will still be "
+                        "fetched but insights (impressions/reach/views) will likely fail."
+                    )
             else:
                 token = None
         if not token:
@@ -411,21 +428,29 @@ class AnalyticsAgent:
         # post_video_views captures views for carousel/slideshow posts that
         # Facebook treats as video content — this is what the native Facebook
         # "Views" counter shows for those post types.
+        #
+        # Fallback order:
+        #   a) Full metric set with period=lifetime
+        #   b) Reduced metric sets with period=lifetime
+        #   c) post_impressions without a period param (API infers it) — works
+        #      on some v22 deployments where lifetime was deprecated
+        # (#100) returned for ALL sets almost always means either the token is a
+        # user token (not a page token) or the app lacks pages_read_engagement.
         insights_err: str | None = None
-        for metric_set in (
-            "post_impressions_unique,post_impressions,post_video_views",
-            "post_impressions_unique,post_impressions",
-            "post_impressions",
-            "post_video_views",
-        ):
+        _insight_params: list[dict] = [
+            {"metric": m, "period": "lifetime"}
+            for m in (
+                "post_impressions_unique,post_impressions,post_video_views",
+                "post_impressions_unique,post_impressions",
+                "post_impressions",
+                "post_video_views",
+            )
+        ] + [{"metric": "post_impressions"}]  # no period — let API infer
+        for params in _insight_params:
             try:
                 resp = requests.get(
                     f"{_GRAPH_BASE}/{platform_post_id}/insights",
-                    params={
-                        "metric": metric_set,
-                        "period": "lifetime",
-                        "access_token": token,
-                    },
+                    params={**params, "access_token": token},
                     timeout=_REQUEST_TIMEOUT,
                 )
                 resp.raise_for_status()
@@ -433,7 +458,7 @@ class AnalyticsAgent:
                 insights_err = f"Facebook insights: {_graph_error(exc)}"
                 logger.warning(
                     "Facebook insights [%s] failed for %s: %s",
-                    metric_set,
+                    params.get("metric", "?")[:40],
                     platform_post_id[:12],
                     exc,
                 )
@@ -467,7 +492,20 @@ class AnalyticsAgent:
         # "likes but no views" case is visible rather than silently swallowed.
         got_views = any(metrics.get(k) is not None for k in ("impressions", "reach", "video_views"))
         if not got_views and insights_err:
-            self._warnings.append(insights_err)
+            if _using_user_token:
+                self._warnings.append(
+                    "Facebook views missing: page token could not be derived "
+                    "(add pages_show_list + pages_read_engagement to your Meta app, "
+                    "or set FACEBOOK_PAGE_ACCESS_TOKEN directly)"
+                )
+            elif "(#100)" in insights_err:
+                self._warnings.append(
+                    "Facebook views missing: insights returned (#100) for all metric sets — "
+                    "the page token likely lacks pages_read_engagement permission. "
+                    "Add it in Meta for Developers → App Dashboard → Permissions and re-authorise."
+                )
+            else:
+                self._warnings.append(insights_err)
         self._last_error = None
         return metrics
 

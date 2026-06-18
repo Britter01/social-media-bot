@@ -9,17 +9,45 @@ It researches trending topics with the Claude API's web search tool, generates c
 ## How it works
 
 ```
-                        scheduler/cron.py  (APScheduler worker)
-                                 │
-   daily 05:30 ──▶ ResearchAgent (Claude + web search)
-                     │  finds + scores trending topics → `topics` row
-                     ▼  hands the best to ↓
-   daily 06:00 ─────────────────┤                          every 5 min
-                                ▼                                 │
-   ContentAgent  ──▶  Thumbnail/Video agents  ──▶  SchedulerAgent ▼
-   (Claude API)       (Imagen 4 Fast / HeyGen)     (optimal slot)  PublisherAgent
-        │                      │                        │          (IG/X/LI/YT/TT)
-        └──────────────── persisted to Supabase as a `posts` row ──┘
+scheduler/cron.py  (APScheduler worker on Railway)
+│
+├─ 05:30 daily ──▶ ResearchAgent
+│                  Haiku 4.5 gathers trending topics via web search
+│                  Sonnet 4.6 scores + assigns pillar / platform / angle
+│                  → persisted to `topics` table as 'selected'
+│                       │
+│                       ▼  ── Human approval gate ──────────────────────┐
+│               review_topics script (approve / reject)                 │
+│               (set REQUIRE_TOPIC_APPROVAL=false to skip)              │
+│                       │                                               │
+│                       ▼  every 15 min                                 │
+│               run_approved_pipeline                                   │
+│               Sonnet 4.6 generates caption + hashtags (ContentAgent) │
+│               Haiku 4.5 fixes repeated phrases (QualityAgent)        │
+│               Sonnet 4.6 plans carousel copy (CarouselAgent)         │
+│               Pillow renders 4 dark-card slides + scene cover        │
+│               slides uploaded to Supabase Storage                    │
+│               SchedulerAgent picks optimal slot (no LLM)             │
+│               → `posts` row: status=scheduled                        │
+│               + auto cross-posts IG/LI → Facebook (same caption)     │
+│                                                                       │
+│                                                              ─────────┘
+├─ 06:00 daily ──▶ run_content_pipeline  (fallback / extra posts)
+│                  Same ContentAgent / CarouselAgent / SchedulerAgent flow
+│
+├─ 02:00 nightly ▶ run_image_refresh
+│                  Finds any scheduled/failed IG or FB post with no slides
+│                  Re-runs CarouselAgent to regenerate them
+│
+├─ every 5 min ──▶ run_publisher
+│                  Claims posts whose scheduled_time has passed
+│                  PublisherAgent posts to IG / FB / X / LI / YT / TT
+│                  IG & FB → 4-slide carousel (Graph API)
+│                  Others → single image or video
+│
+└─ every 2 hr ───▶ run_analytics
+                   AnalyticsAgent fetches engagement at 24h + 7d after publish
+                   Stores reach / impressions / likes / comments → `post_analytics`
 ```
 
 The **research agent** runs first: it uses Claude's server-side web search tool to find trending topics across the brand's themes, scores each for brand fit with structured outputs, and stores them in the `topics` table.
@@ -46,13 +74,17 @@ Clear, confident, warm. Never patronising. Short sentences. (Baked into the cach
 ### Model usage (cost-tiered, no Opus)
 Each agent uses the cheapest model that does its job well — Opus isn't used anywhere.
 
-| Task | Model | Why |
-| --- | --- | --- |
-| Caption + hashtags (`content_agent`) | `ANTHROPIC_MODEL_CREATIVE` — Sonnet 4.6 | Creative writing drives engagement; hashtags ride along in the same call. |
-| Topic scoring / pillar + platform + angle (`research_agent`) | Sonnet 4.6 | The ideation/judgment step; small structured output, so the premium applies to few tokens. |
-| Trend discovery / web search (`research_agent`) | `ANTHROPIC_MODEL_FAST` — Haiku 4.5 | High-token gather-and-summarise; the search is server-side, so a cheap model suffices. |
-| Scheduling (`scheduler_agent`) | none | Deterministic best-time table lookup — zero tokens, cheaper than any model. |
-| Thumbnails / video / publishing | none (Imagen / HeyGen / platform APIs) | Not text tasks. |
+| Task | Model | Agent | Why |
+| --- | --- | --- | --- |
+| Caption + hashtags | `ANTHROPIC_MODEL_CREATIVE` — Sonnet 4.6 | `content_agent` | Creative writing drives engagement; hashtags ride along in the same call. |
+| Carousel copy (slide headlines, body, CTA) | Sonnet 4.6 | `carousel_agent` | Brand-voice judgment needed for punchy slide copy; no image model required — slides are pure Pillow. |
+| Topic scoring / pillar + platform + angle | Sonnet 4.6 | `research_agent` | Ideation/judgment step; small structured output. |
+| Trend discovery / web search | `ANTHROPIC_MODEL_FAST` — Haiku 4.5 | `research_agent` | High-token gather-and-summarise; the search is server-side so a cheap model suffices. |
+| Text QC / repeated-phrase fix | Haiku 4.5 | `quality_agent` | Low-stakes mechanical fix; fast + cheap. |
+| Scheduling | none | `scheduler_agent` | Deterministic best-time table lookup — zero tokens. |
+| Thumbnails (single-image posts) | none — Imagen 4 Fast | `thumbnail_agent` | Image generation, not text. |
+| Video (YouTube/TikTok) | none — HeyGen | `video_agent` | Cloned-voice video generation. |
+| Publishing / analytics | none — platform APIs | `publisher_agent`, `analytics_agent` | REST API calls only. |
 
 ---
 
@@ -62,19 +94,28 @@ Each agent uses the cheapest model that does its job well — Opus isn't used an
 core/
   config.py        Loads + validates all env vars; the Config singleton.
   models.py        Post / Topic / Brand data models, Pillar/Platform/Status enums.
-  database.py      Supabase CRUD for the `posts` and `topics` tables.
+  database.py      Supabase CRUD for the `posts`, `topics`, and `post_analytics` tables.
   storage.py       Supabase Storage uploader (public URLs for media).
+  cover_image.py   Lifestyle scene overlay — warps a text card onto a scene photo
+                   for carousel cover slides (perspective transform via Pillow).
 agents/
   research_agent.py   Trending-topic discovery + scoring (Claude web search
                       tool, structured outputs); seeds the content agent.
+                      Auto cross-posts every IG/LI topic to Facebook.
   content_agent.py    Captions + hashtags (Claude, adaptive thinking,
                       prompt caching, structured outputs).
-  thumbnail_agent.py  Images via Imagen 4 Fast (imagen-4.0-fast-generate-001).
+  carousel_agent.py   4-slide text carousels for Instagram + Facebook (Claude
+                      plans copy, Pillow renders dark brand cards). No image
+                      model — slides are 100% deterministic.
+  thumbnail_agent.py  Single images via Imagen 4 Fast for non-carousel platforms.
   video_agent.py      Short videos via HeyGen with a cloned voice.
-  publisher_agent.py  Posts to Instagram / X / LinkedIn / YouTube / TikTok.
+  quality_agent.py    Text QC (repeated-phrase fix) and image sanity check.
+  publisher_agent.py  Posts to Instagram / Facebook / X / LinkedIn / YouTube / TikTok.
   scheduler_agent.py  Optimal posting time per platform.
+  analytics_agent.py  Fetches engagement metrics (reach, impressions, likes…)
+                      from each platform API at 24h and 7d after publish.
 scheduler/
-  cron.py          APScheduler worker: content pipeline + publisher loop.
+  cron.py          APScheduler worker: all pipeline jobs + publisher loop.
 scripts/
   smoke_test.py    Run one post end-to-end in dry-run mode.
   review_topics.py Approve/reject researched topics (the human gate).
