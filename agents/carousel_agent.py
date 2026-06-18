@@ -138,6 +138,19 @@ class CarouselAgent:
         """Ask Claude to plan the 4-slide carousel format and slide copy."""
         import json
 
+        # Derive the best available topic signal — topic field is canonical, but
+        # old or partially-built posts may have it empty; fall back to title then
+        # the first sentence of caption so we always have something to plan from.
+        topic = (post.topic or "").strip()
+        if not topic:
+            topic = (post.title or "").strip()
+        if not topic and post.caption:
+            topic = post.caption.split("\n")[0][:150].strip()
+        if not topic:
+            raise RuntimeError(
+                "Cannot plan carousel: post has no topic, title, or caption to work from"
+            )
+
         system = (
             f"You are the content strategist for {self._cfg.brand_name}, "
             f"founded by {self._cfg.brand_founder}. "
@@ -151,7 +164,7 @@ class CarouselAgent:
         )
         prompt = (
             f"Plan a 4-slide carousel for the '{post.pillar}' pillar on {post.platform.upper()}.\n"
-            f"Topic: {post.topic}\n\n"
+            f"Topic: {topic}\n\n"
             f"Choose the best format for this topic ({_FORMATS}). "
             "Return EXACTLY 2 value slides (the cover and CTA are separate fields). "
             "Each value slide needs a punchy headline and 1-2 sentences of useful copy. "

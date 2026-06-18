@@ -459,6 +459,7 @@ def run_image_refresh() -> str | None:
                             pillar=c["pillar"],
                             platform=c["platform"],
                             topic=c.get("topic", ""),
+                            title=c.get("title", ""),
                             caption=c.get("caption", ""),
                             hashtags=list(c.get("hashtags") or []),
                         )
@@ -891,30 +892,48 @@ def run_diagnostics() -> str:
             )
             if _fb_rows:
                 _fppid = _fb_rows[0].get("platform_post_id", "")
-                _ir = _fb_req.get(
-                    f"https://graph.facebook.com/v22.0/{_fppid}/insights",
-                    params={
-                        "metric": "post_impressions",
-                        "period": "lifetime",
-                        "access_token": _fb_tok,
-                    },
-                    timeout=8,
-                )
-                try:
-                    _ir.raise_for_status()
-                    _idata = _ir.json().get("data", [])
-                    if _idata:
-                        _val = (_idata[0].get("values") or [{}])[0].get("value", "?")
-                        parts.append(f"fb insights OK (page={_page_name}, impressions={_val})")
-                    else:
-                        parts.append(
-                            f"fb insights empty — metric returned no data "
-                            f"(page={_page_name}, post={_fppid[:12]})"
+                # Mirror the analytics agent's fallback sequence — several
+                # post_impressions metrics have been deprecated by Facebook and
+                # return (#100). Try each set until one succeeds.
+                _fb_success = False
+                _fb_tried: list[str] = []
+                for _mset in (
+                    "post_impressions_unique,post_impressions,post_video_views",
+                    "post_impressions_unique,post_impressions",
+                    "post_video_views",
+                ):
+                    try:
+                        _ir = _fb_req.get(
+                            f"https://graph.facebook.com/v22.0/{_fppid}/insights",
+                            params={
+                                "metric": _mset,
+                                "period": "lifetime",
+                                "access_token": _fb_tok,
+                            },
+                            timeout=8,
                         )
-                except Exception as _ie:
+                        _ir.raise_for_status()
+                        _idata = _ir.json().get("data", [])
+                        if _idata:
+                            _first = _idata[0]
+                            _mname = _first.get("name", "?")
+                            _vals = _first.get("values") or []
+                            _val = _vals[0].get("value", "?") if _vals else _first.get("value", "?")
+                            parts.append(
+                                f"fb insights OK (page={_page_name}, "
+                                f"{_mname}={_val}, post={_fppid[:12]})"
+                            )
+                            _fb_success = True
+                            break
+                        else:
+                            _fb_tried.append(f"{_mset.split(',')[0]}: empty")
+                    except Exception as _ie:
+                        _fb_tried.append(f"{_mset.split(',')[0]}: {_fb_err(_ie)[:60]}")
+
+                if not _fb_success:
                     parts.append(
                         f"fb insights FAIL (page={_page_name}, post={_fppid[:12]}): "
-                        f"{_fb_err(_ie)[:150]}"
+                        + "; ".join(_fb_tried)
                     )
             else:
                 parts.append("fb insights: no published Facebook post found yet")
