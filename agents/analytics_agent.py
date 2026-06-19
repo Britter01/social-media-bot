@@ -238,6 +238,86 @@ class AnalyticsAgent:
         logger.info("Stored %d %s snapshot(s)", count, snapshot_type)
         return count
 
+    def run_views_refresh(self, platforms: list[str] | None = None) -> int:
+        """Re-fetch views for posts that have engagement but no view metrics.
+
+        Targets posts that already have an analytics row (so they're excluded
+        from the normal backfill) but where impressions, reach, and video_views
+        are all NULL — typically because the metric names changed after the rows
+        were first written (e.g. the 2026-06-15 Facebook post_impressions ->
+        post_views deprecation).
+
+        Only updates the view columns; does NOT overwrite existing likes/comments.
+        Returns the number of rows refreshed.
+        """
+        from core.database import get_database
+
+        _platforms = platforms or ["facebook", "instagram"]
+        db = get_database(self._cfg)
+        posts = db.get_posts_missing_views(_platforms)
+        if not posts:
+            logger.debug("Views refresh: no posts with missing view metrics")
+            return 0
+
+        logger.info(
+            "Views refresh: %d post(s) have engagement but no view metrics — re-fetching",
+            len(posts),
+        )
+        count = 0
+        for row in posts:
+            post_id = row["id"]
+            platform = row.get("platform", "")
+            platform_post_id = row.get("platform_post_id", "")
+            try:
+                self._last_error = None
+                metrics = self.fetch_metrics(post_id, platform, platform_post_id, "7d")
+                if not metrics:
+                    logger.debug(
+                        "Views refresh: still no metrics for %s (%s)", post_id[:8], platform
+                    )
+                    continue
+                # Only update view columns — don't touch existing engagement counts.
+                view_only = {
+                    k: metrics[k]
+                    for k in ("impressions", "reach", "video_views")
+                    if metrics.get(k) is not None
+                }
+                if not view_only:
+                    logger.debug(
+                        "Views refresh: views still null for %s (%s) — metric name may differ",
+                        post_id[:8],
+                        platform,
+                    )
+                    if self._last_error or self._warnings:
+                        err = self._last_error or (self._warnings[-1] if self._warnings else "")
+                        self._errors.append(f"views refresh {platform}: {err[:200]}")
+                    continue
+                # Patch the existing analytics row with the new view values.
+                try:
+                    self._client.table(_ANALYTICS_TABLE).update(view_only).eq(
+                        "post_id", post_id
+                    ).execute()
+                    self._plat_stored[platform] = self._plat_stored.get(platform, 0) + 1
+                    self._stored += 1
+                    count += 1
+                    logger.info(
+                        "Views refresh: patched %s (%s) — %s",
+                        post_id[:8],
+                        platform,
+                        view_only,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Views refresh: failed to patch post %s (%s)", post_id[:8], platform
+                    )
+            except Exception as exc:
+                self._errors.append(f"views refresh {platform}: {exc}")
+                logger.exception(
+                    "Views refresh: fetch failed for post %s (%s)", post_id[:8], platform
+                )
+        logger.info("Views refresh: patched %d post(s)", count)
+        return count
+
     # ── Platform fetchers ─────────────────────────────────────────────────────
 
     def _fetch_instagram(self, platform_post_id: str) -> dict | None:

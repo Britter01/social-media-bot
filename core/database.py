@@ -407,8 +407,53 @@ class Database:
 
         return [row for row in candidates if row["id"] not in existing_ids]
 
+    def get_posts_missing_views(self, platforms: list[str]) -> list[dict]:
+        """Return published posts that have an analytics row but no view metrics.
 
-_db: Database | None = None
+        Used to re-fetch views after a metric rename (e.g. the 2026-06-15
+        deprecation of post_impressions -> post_views on Facebook).  Only
+        rows where ALL three view columns are NULL are returned — if any view
+        metric was ever stored we leave that row alone.
+        """
+        if not platforms:
+            return []
+        try:
+            # Get published posts for these platforms that have a platform_post_id.
+            posts_resp = (
+                self._client.table(_TABLE)
+                .select("id, platform, platform_post_id, published_time")
+                .eq("status", "published")
+                .in_("platform", platforms)
+                .not_.is_("platform_post_id", "null")
+                .neq("platform_post_id", "dry-run")
+                .execute()
+            )
+            posts = posts_resp.data or []
+        except Exception:
+            logger.exception("Failed to query published posts for views-missing check")
+            return []
+
+        if not posts:
+            return []
+
+        post_ids = [p["id"] for p in posts]
+        try:
+            # Find analytics rows for these posts where all view columns are NULL.
+            rows_resp = (
+                self._client.table(_ANALYTICS_TABLE)
+                .select("post_id")
+                .in_("post_id", post_ids)
+                .is_("impressions", "null")
+                .is_("reach", "null")
+                .is_("video_views", "null")
+                .execute()
+            )
+            missing_view_ids = {r["post_id"] for r in (rows_resp.data or [])}
+        except Exception:
+            logger.exception("Failed to query analytics rows for views check")
+            return []
+
+        return [p for p in posts if p["id"] in missing_view_ids]
 
 
 def get_database(cfg: Config = config) -> Database:

@@ -672,8 +672,13 @@ def run_analytics() -> str | None:
         n24 = agent.run_snapshot("24h")
         n7d = agent.run_snapshot("7d")
         nb = agent.run_backfill()
+        nv = agent.run_views_refresh()
         logger.info(
-            "=== Analytics fetch done: %d 24h, %d 7d snapshots, %d backfilled ===", n24, n7d, nb
+            "=== Analytics done: %d 24h, %d 7d, %d backfilled, %d views patched ===",
+            n24,
+            n7d,
+            nb,
+            nv,
         )
         return agent.summary()
     except Exception as exc:
