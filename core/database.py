@@ -456,6 +456,9 @@ class Database:
         return [p for p in posts if p["id"] in missing_view_ids]
 
 
+_db: Database | None = None
+
+
 def get_database(cfg: Config = config) -> Database:
     """Return a process-wide singleton ``Database`` (lazy-initialised)."""
     global _db
