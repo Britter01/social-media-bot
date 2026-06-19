@@ -551,30 +551,28 @@ class AnalyticsAgent:
 
         # 3. Insights — views/reach, best-effort with fallback.
         #
-        # IMPORTANT (2026-06-15 deprecation): Meta removed the entire
-        # post_impressions* family AND the 3-second post_video_views metric for
-        # ALL Graph API versions. Calling them now returns
-        # "(#100) ... must be a valid insights metric" even with a correct page
-        # token and pages_read_engagement — the token is NOT the problem. The
-        # replacement is the unified "views" metric (the same migration Instagram
-        # already made: impressions -> views).
-        #
-        # We try the new metric names first, then fall back to the legacy ones so
-        # any pre-deprecation/backfilled data still resolves. The Graph API
-        # rejects the whole request if ANY metric in the set is invalid, so each
-        # set is attempted independently and the first that succeeds wins.
+        # 2026-06-15 deprecation: Meta removed post_impressions*, post_video_views,
+        # AND post_views* for ALL Graph API versions. The confirmed replacement is
+        # post_media_view (announced by Meta partner tooling such as Yext/Sprout
+        # Social). Try the new name first, then the intermediate post_views names
+        # we tried, then the original legacy names for any pre-deprecation data.
+        # The Graph API rejects the whole request if ANY metric is invalid, so
+        # each set is tried independently.
         insights_err: str | None = None
         _insight_params: list[dict] = [
             {"metric": m, "period": "lifetime"}
             for m in (
-                # New unified "views" metrics (post_impressions replacement).
+                # Current replacement (confirmed 2026-06-15 deprecation).
+                "post_media_view_unique,post_media_view",
+                "post_media_view",
+                # Intermediate names tried before confirmed replacement.
                 "post_views_unique,post_views",
                 "post_views",
-                # Legacy (valid only on data created before 2026-06-15).
+                # Legacy names (valid on data created before 2026-06-15).
                 "post_impressions_unique,post_impressions,post_video_views",
                 "post_impressions",
             )
-        ] + [{"metric": "post_views"}]  # no period — let the API infer it
+        ] + [{"metric": "post_media_view"}]  # no period — let the API infer it
         for params in _insight_params:
             try:
                 resp = requests.get(
@@ -599,11 +597,15 @@ class AnalyticsAgent:
                 name = item.get("name", "")
                 values = item.get("values") or []
                 val = values[0].get("value") if values else item.get("value")
-                # Map both new (views) and legacy (impressions) names onto the
-                # same stored columns so the dashboard is naming-agnostic.
-                if name in ("post_views", "post_impressions"):
+                # Map all known names (current + intermediate + legacy) onto
+                # the same stored columns so the dashboard is naming-agnostic.
+                if name in ("post_media_view", "post_views", "post_impressions"):
                     metrics["impressions"] = _int(val)
-                elif name in ("post_views_unique", "post_impressions_unique"):
+                elif name in (
+                    "post_media_view_unique",
+                    "post_views_unique",
+                    "post_impressions_unique",
+                ):
                     metrics["reach"] = _int(val)
                 elif name == "post_video_views":
                     metrics["video_views"] = _int(val)
