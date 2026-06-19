@@ -279,8 +279,16 @@ class InfographicAgent:
         )
         logger.debug("InfographicAgent: raw research (%d chars)", len(raw_research))
 
-        # --- Step 2: structure into card plan (Sonnet — JSON synthesis) --------
-        plan_response = client.beta.messages.parse(
+        # --- Step 2: structure into card plan via tool use (SDK-version-safe) ---
+        # tool_choice={"type":"tool"} forces the model to always call the tool,
+        # giving us a guaranteed structured JSON output without needing
+        # beta.messages.parse() or response_format (added in newer SDK versions).
+        plan_tool = {
+            "name": "create_infographic_plan",
+            "description": "Produce the structured infographic plan from research findings.",
+            "input_schema": _InfographicPlan.model_json_schema(),
+        }
+        plan_response = client.messages.create(
             model=self._cfg.model_creative,
             max_tokens=1500,
             system=(
@@ -288,8 +296,10 @@ class InfographicAgent:
                 "a brand that makes technology feel exciting and accessible. "
                 "Given research notes, produce an infographic plan with exactly 4 stat cards. "
                 "Lead with the most jaw-dropping statistic. Keep all text SHORT — "
-                "stats cards live on a phone screen."
+                "stat cards live on a phone screen."
             ),
+            tools=[plan_tool],
+            tool_choice={"type": "tool", "name": "create_infographic_plan"},
             messages=[
                 {
                     "role": "user",
@@ -303,9 +313,14 @@ class InfographicAgent:
                     ),
                 }
             ],
-            response_format=_InfographicPlan,
         )
-        return plan_response.parsed
+        for block in plan_response.content:
+            if (
+                getattr(block, "type", None) == "tool_use"
+                and block.name == "create_infographic_plan"
+            ):
+                return _InfographicPlan(**block.input)
+        raise RuntimeError("InfographicAgent: structured plan tool call returned no result")
 
     # ── Background generation ──────────────────────────────────────────────────
 
