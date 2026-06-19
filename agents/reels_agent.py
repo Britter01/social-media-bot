@@ -47,14 +47,17 @@ FPS = 24
 MUSIC_VOLUME = 0.25  # 25% — keeps text slides as the focal point
 
 # ── Freesound search terms per content pillar ──────────────────────────────────
+# Each pillar has a list of queries tried in order — the first that returns
+# results wins. Broader/generic terms at the end ensure something is always found.
 
-_PILLAR_QUERIES: dict[str, str] = {
-    "AI Guide": "ambient electronic technology",
-    "Tech Lifestyle": "upbeat background electronic",
-    "Productivity": "focus lo-fi concentration",
-    "Fitness Tech": "energetic motivational beat",
-    "Review": "calm cinematic ambient",
+_PILLAR_QUERIES: dict[str, list[str]] = {
+    "AI Guide": ["ambient electronic technology", "ambient electronic", "ambient background"],
+    "Tech Lifestyle": ["upbeat electronic background", "upbeat electronic", "upbeat ambient"],
+    "Productivity": ["lo-fi focus", "lo-fi", "calm ambient background"],
+    "Fitness Tech": ["energetic electronic beat", "energetic upbeat", "upbeat background"],
+    "Review": ["calm cinematic ambient", "cinematic ambient", "soft ambient background"],
 }
+_PILLAR_QUERIES_DEFAULT = ["ambient background music", "ambient", "background music"]
 _FREESOUND_SEARCH = "https://freesound.org/apiv2/search/text/"
 
 
@@ -258,46 +261,60 @@ class ReelsAgent:
     # ── Music ──────────────────────────────────────────────────────────────────
 
     def _fetch_music(self, pillar: str) -> str | None:
-        """Fetch a CC0 preview track from Freesound matching the content pillar.
+        """Fetch a background music preview from Freesound matching the content pillar.
 
-        Returns a local path to the downloaded mp3, or None if unavailable.
-        Failures are always swallowed so a missing key / API hiccup never
-        blocks Reel production.
+        Tries pillar-specific search terms first, then falls back to generic
+        ambient queries so music is almost always attached. The CC0-only
+        restriction is intentionally dropped — most quality background tracks
+        on Freesound are CC-BY, and that licence allows use in social media
+        videos. The licence used is logged for reference.
+
+        Returns a local .mp3 path, or None on failure (never raises).
         """
         if not self._freesound_key:
             return None
 
-        query = _PILLAR_QUERIES.get(pillar, "ambient background")
+        queries = list(_PILLAR_QUERIES.get(pillar, [])) + _PILLAR_QUERIES_DEFAULT
+
         try:
-            resp = httpx.get(
-                _FREESOUND_SEARCH,
-                params={
-                    "query": query,
-                    "filter": 'duration:[15 TO 120] license:"Creative Commons 0"',
-                    "fields": "id,name,previews,duration",
-                    "page_size": 15,
-                    "token": self._freesound_key,
-                },
-                timeout=15.0,
-            )
-            resp.raise_for_status()
-            results = resp.json().get("results", [])
-            if not results:
-                logger.info("ReelsAgent: Freesound returned 0 results for %r", query)
-                return None
+            with httpx.Client(timeout=15.0) as client:
+                results = []
+                tried: list[str] = []
+                for query in queries:
+                    resp = client.get(
+                        _FREESOUND_SEARCH,
+                        params={
+                            "query": query,
+                            "filter": "duration:[20 TO 120]",
+                            "fields": "id,name,previews,duration,license",
+                            "page_size": 15,
+                            "sort": "rating_desc",
+                            "token": self._freesound_key,
+                        },
+                    )
+                    resp.raise_for_status()
+                    results = resp.json().get("results", [])
+                    tried.append(query)
+                    if results:
+                        break
 
-            track = random.choice(results[:10])
-            preview_url = (track.get("previews") or {}).get("preview-hq-mp3")
-            if not preview_url:
-                return None
+                if not results:
+                    logger.info(
+                        "ReelsAgent: Freesound returned 0 results for all queries %s", tried
+                    )
+                    return None
 
-            mp3 = httpx.get(preview_url, timeout=30.0, follow_redirects=True)
-            mp3.raise_for_status()
+                track = random.choice(results[:10])
+                preview_url = (track.get("previews") or {}).get("preview-hq-mp3")
+                if not preview_url:
+                    return None
 
-            content = mp3.content
-            # Validate it's actually audio (MP3 starts with ID3 tag or 0xFF 0xFB/FA/F3/F2
-            # sync bytes). Freesound occasionally returns an HTML error page when the
-            # token lacks preview permissions — saving that as .mp3 produces static.
+                mp3_resp = client.get(preview_url, follow_redirects=True, timeout=30.0)
+                mp3_resp.raise_for_status()
+
+            content = mp3_resp.content
+            # Validate it's actually audio — Freesound occasionally returns an
+            # HTML error page which produces static noise when decoded as MP3.
             if not (
                 content[:3] == b"ID3"
                 or (len(content) >= 2 and content[0] == 0xFF and content[1] & 0xE0 == 0xE0)
@@ -311,7 +328,12 @@ class ReelsAgent:
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3", prefix="reel_music_")
             tmp.write(content)
             tmp.close()
-            logger.info("ReelsAgent: downloaded music track %r", track.get("name"))
+            logger.info(
+                "ReelsAgent: downloaded %r (query=%r, licence=%s)",
+                track.get("name"),
+                tried[-1],
+                track.get("license", "unknown"),
+            )
             return tmp.name
 
         except Exception:
