@@ -62,6 +62,12 @@ class AnalyticsAgent:
         # LinkedIn personal-profile detection — only emit the "no analytics API"
         # error once per run, not once per post (avoids x24 noise in the summary).
         self._linkedin_no_org_logged = False
+        # Per-platform checked/stored tallies so the summary can show exactly
+        # which platforms are (and aren't) producing analytics — otherwise a
+        # platform that is never even queried (e.g. Facebook posts outside the
+        # snapshot window) is invisible behind another platform's error noise.
+        self._plat_checked: dict[str, int] = {}
+        self._plat_stored: dict[str, int] = {}
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -70,6 +76,14 @@ class AnalyticsAgent:
         from collections import Counter
 
         parts = [f"checked {self._checked} post(s), stored {self._stored}"]
+        # Per-platform breakdown (checked/stored) — makes "Facebook isn't being
+        # picked up at all" vs "Facebook is fetched but stores nothing" obvious.
+        if self._plat_checked:
+            breakdown = ", ".join(
+                f"{plat} {self._plat_stored.get(plat, 0)}/{n}"
+                for plat, n in sorted(self._plat_checked.items())
+            )
+            parts.append(f"by platform: {breakdown}")
         if self._stored == 0 and self._errors:
             top = Counter(self._errors).most_common(2)
             parts.append("; ".join(f"{msg} (x{n})" for msg, n in top))
@@ -85,6 +99,7 @@ class AnalyticsAgent:
     def _record(self, post_id: str, platform: str, metrics: dict | None) -> bool:
         """Track diagnostics for one fetch; return True if metrics were usable."""
         self._checked += 1
+        self._plat_checked[platform] = self._plat_checked.get(platform, 0) + 1
         if metrics is None:
             if self._last_error:
                 self._errors.append(self._last_error)
@@ -174,6 +189,7 @@ class AnalyticsAgent:
                 self._upsert(post_id, platform, platform_post_id, "7d", metrics)
                 count += 1
                 self._stored += 1
+                self._plat_stored[platform] = self._plat_stored.get(platform, 0) + 1
             except Exception as exc:
                 self._errors.append(f"{platform}: {exc}")
                 logger.exception("Backfill failed for post %s (%s)", post_id[:8], platform)
@@ -214,6 +230,7 @@ class AnalyticsAgent:
                 self._upsert(post_id, platform, platform_post_id, snapshot_type, metrics)
                 count += 1
                 self._stored += 1
+                self._plat_stored[platform] = self._plat_stored.get(platform, 0) + 1
             except Exception:
                 logger.exception(
                     "Failed to fetch/store analytics for post %s (%s)", post_id[:8], platform
