@@ -940,11 +940,22 @@ def run_diagnostics() -> str:
     except Exception as exc:
         reel_parts.append(f"moviepy FAILED ({str(exc)[:90]})")
 
-    # ffmpeg binary on PATH — moviepy shells out to it for every write.
+    # ffmpeg binary — moviepy shells out to it for every write. It works with
+    # EITHER a system ffmpeg on PATH or the static binary bundled by the
+    # imageio-ffmpeg package (a moviepy dependency), so we accept both.
     import shutil as _shutil
 
     _ffmpeg = _shutil.which("ffmpeg")
-    reel_parts.append(f"ffmpeg {'OK' if _ffmpeg else 'MISSING (add to nixpacks.toml)'}")
+    if not _ffmpeg:
+        try:
+            import imageio_ffmpeg as _iio
+
+            _ffmpeg = _iio.get_ffmpeg_exe()
+            reel_parts.append("ffmpeg OK (imageio-ffmpeg)")
+        except Exception:
+            reel_parts.append("ffmpeg MISSING (pip install imageio-ffmpeg)")
+    else:
+        reel_parts.append("ffmpeg OK (system)")
 
     # Freesound key presence (optional — Reels render silently without it).
     reel_parts.append(

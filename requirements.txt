@@ -28,4 +28,9 @@ APScheduler>=3.10.4
 tzdata>=2024.1                     # zoneinfo data (Windows / slim images)
 
 # Reels video generation
-moviepy>=1.0.3                     # slideshow assembly + audio mixing (requires ffmpeg on PATH)
+# Pinned <2.0 — moviepy 2.x removed the moviepy.editor module and renamed the
+# whole clip API (set_duration→with_duration, volumex→with_volume_scaled, …),
+# which ReelsAgent relies on. imageio-ffmpeg bundles a static ffmpeg binary so
+# rendering works even when no system ffmpeg is on PATH.
+moviepy>=1.0.3,<2.0.0
+imageio-ffmpeg>=0.4.9
