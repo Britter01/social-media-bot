@@ -775,6 +775,56 @@ def _render_pipeline_controls(scope: str) -> None:
         elif _tok_msg:
             st.caption(f"🔑 Last token refresh failed: {_tok_msg}")
 
+    st.markdown("---")
+    st.markdown(
+        "<div style='font-size:12px;font-weight:600;letter-spacing:0.1em;"
+        "text-transform:uppercase;color:#888;margin-bottom:6px'>Generate Infographic</div>",
+        unsafe_allow_html=True,
+    )
+    _infog_format = st.selectbox(
+        "Format",
+        ["Instagram + Facebook Reels", "Instagram Reel only", "Facebook Reel only"],
+        key=f"{scope}_infog_fmt",
+        label_visibility="collapsed",
+    )
+    _infog_cmd_map = {
+        "Instagram + Facebook Reels": "create_infographic",
+        "Instagram Reel only": "create_infographic_ig",
+        "Facebook Reel only": "create_infographic_fb",
+    }
+    if st.button(
+        "📊  Generate Infographic",
+        use_container_width=True,
+        help=(
+            "Research a trending AI/tech topic, compose 5 eye-catching stat cards using "
+            "Higgsfield visuals, and assemble them into a 15-second Reel. "
+            "The finished post is auto-scheduled. Takes ~2 minutes."
+        ),
+        key=f"{scope}_infog_btn",
+    ):
+        try:
+            _queue_command(_infog_cmd_map[_infog_format], cooldown_key="create_infographic")
+            st.info("Infographic queued — the Reel appears in Scheduled within ~5 min.")
+        except RuntimeError:
+            pass
+        except Exception:
+            st.error("Failed to queue infographic.")
+
+    _infog_last = load_last_command_status(db, "create_infographic")
+    if not _infog_last:
+        _infog_last = load_last_command_status(db, "create_infographic_ig")
+    if not _infog_last:
+        _infog_last = load_last_command_status(db, "create_infographic_fb")
+    if _infog_last:
+        _is = _infog_last.get("status", "")
+        _im = _infog_last.get("error") or ""
+        if _is in ("pending", "running"):
+            st.caption("📊 Infographic generating…")
+        elif _is == "done" and _im:
+            st.caption(f"📊 {_im}")
+        elif _im:
+            st.caption(f"📊 Failed: {_im}")
+
     if st.button("↺  Refresh data now", use_container_width=True, key=f"{scope}_refresh"):
         st.cache_data.clear()
         st.rerun()

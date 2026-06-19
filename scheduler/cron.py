@@ -1227,6 +1227,8 @@ def run_pending_commands() -> None:
                 result_msg = run_diagnostics()
             elif command == "refresh_token":
                 result_msg = run_token_refresh()
+            elif command.startswith("create_infographic"):
+                result_msg = run_infographic_pipeline(command)
             else:
                 error = f"Unknown command: {command}"
                 logger.warning("Command queue: %s", error)
@@ -1270,6 +1272,65 @@ def run_cleanup_commands() -> None:
             logger.info("Cleanup: deleted %d old pipeline_commands row(s)", deleted)
     except Exception:
         logger.exception("Cleanup: failed to prune pipeline_commands")
+
+
+def run_infographic_pipeline(command: str = "create_infographic") -> str:
+    """Generate a data-driven infographic Reel and schedule it for publishing.
+
+    *command* encodes the target platform(s):
+      "create_infographic"          → Instagram Reel + Facebook Reel (default)
+      "create_infographic_ig"       → Instagram Reel only
+      "create_infographic_fb"       → Facebook Reel only
+      "create_infographic_static"   → Static image post on Instagram (not yet implemented)
+    """
+    from agents.infographic_agent import InfographicAgent
+    from agents.scheduler_agent import SchedulerAgent
+
+    logger.info("=== Infographic pipeline starting (command=%s) ===", command)
+
+    platform_map = {
+        "create_infographic_ig": [Platform.INSTAGRAM.value],
+        "create_infographic_fb": [Platform.FACEBOOK.value],
+    }
+    platforms = platform_map.get(command, None)  # None → agent picks defaults
+
+    try:
+        agent = InfographicAgent()
+        scheduler_agent = SchedulerAgent()
+        db = get_database()
+    except Exception as exc:
+        logger.exception("Infographic pipeline: could not initialise")
+        return f"infographic pipeline failed to initialise: {type(exc).__name__}: {exc}"[:300]
+
+    try:
+        posts = agent.create_posts(platforms=platforms)
+    except Exception as exc:
+        logger.exception("Infographic pipeline: create_posts failed")
+        return f"infographic creation failed: {type(exc).__name__}: {exc}"[:300]
+
+    if not posts:
+        return "infographic pipeline: no posts created"
+
+    last_slot: dict[str, datetime] = db.latest_scheduled_time_by_platform()
+    created = 0
+    for post in posts:
+        try:
+            scheduler_agent.schedule(post, after=last_slot.get(post.platform))
+            last_slot[post.platform] = post.scheduled_time
+            db.insert(post)
+            created += 1
+            logger.info(
+                "Infographic pipeline: scheduled %s reel %s at %s",
+                post.platform,
+                post.id,
+                post.scheduled_time,
+            )
+        except Exception:
+            logger.exception("Infographic pipeline: failed to persist post %s", post.id)
+
+    msg = f"infographic: created {created} reel post(s)"
+    logger.info("=== Infographic pipeline finished: %s ===", msg)
+    return msg
 
 
 def run_token_refresh() -> str:
@@ -1453,6 +1514,18 @@ def build_scheduler():
         run_token_refresh,
         trigger=CronTrigger(day_of_week="sun", hour=4, minute=0, timezone=config.timezone),
         id="token_refresh",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
+
+    # Daily AI/tech infographic Reel — researched, designed and scheduled each
+    # morning after the research pipeline (05:30) and content pipeline (06:00)
+    # have already run so the infographic slot falls after regular posts.
+    scheduler.add_job(
+        run_infographic_pipeline,
+        trigger=CronTrigger(hour=11, minute=0, timezone=config.timezone),
+        id="infographic_pipeline",
         max_instances=1,
         coalesce=True,
         misfire_grace_time=3600,
