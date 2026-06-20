@@ -41,6 +41,7 @@ class PostStatus(StrEnum):
     DRAFT = "draft"  # created, awaiting content
     CONTENT_READY = "content_ready"
     MEDIA_READY = "media_ready"  # thumbnail and/or video generated
+    MANUAL_READY = "manual_ready"  # manually generated, awaiting user decision
     SCHEDULED = "scheduled"  # has a scheduled time, awaiting publish
     PUBLISHING = "publishing"
     PUBLISHED = "published"

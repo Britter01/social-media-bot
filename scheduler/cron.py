@@ -47,11 +47,13 @@ def _round_robin_platforms(pillars: list[str], platforms: list[str]) -> list[tup
     return [(pillar, next(wheel)) for pillar in pillars]
 
 
-def run_content_pipeline() -> str:
+def run_content_pipeline(manual: bool = False) -> str:
     """Generate, enrich, and schedule a batch of posts.
 
     Returns a short diagnostic string so the dashboard Pipeline tab can show
     what happened (agent status, post count, image generation result).
+    When *manual* is True, posts land in ``manual_ready`` status (Generated tab)
+    rather than being auto-scheduled.
     """
     from agents.carousel_agent import CarouselAgent
     from agents.content_agent import ContentAgent
@@ -107,14 +109,17 @@ def run_content_pipeline() -> str:
             has_image = bool(post.thumbnail_url) or bool(post.slides)
             if not has_image:
                 no_image += 1
-            after = last_slot.get(platform)
-            scheduler_agent.schedule(post, after=after)
-            last_slot[platform] = post.scheduled_time
+            if manual:
+                post.mark(PostStatus.MANUAL_READY)
+            else:
+                after = last_slot.get(platform)
+                scheduler_agent.schedule(post, after=after)
+                last_slot[platform] = post.scheduled_time
             db.upsert(post)
             created += 1
 
             # Generate Reel twin(s) for any carousel (IG or FB).
-            if post.platform in _CAROUSEL_PLATFORMS and reels_agent and post.slides:
+            if not manual and post.platform in _CAROUSEL_PLATFORMS and reels_agent and post.slides:
                 _configured = set(config.configured_platforms())
                 _reel_count = _create_reel_twins(
                     post,
@@ -1246,7 +1251,7 @@ def run_pending_commands() -> None:
                 result_msg = run_image_refresh()
                 run_publisher()
             elif command == "content":
-                result_msg = run_content_pipeline()
+                result_msg = run_content_pipeline(manual=True)
             elif command == "research":
                 result_msg = run_research_pipeline()
             elif command == "weekly_strategy":
@@ -1262,6 +1267,8 @@ def run_pending_commands() -> None:
                 result_msg = run_infographic_pipeline(
                     _parts[0], topic=_parts[1] if len(_parts) > 1 else None
                 )
+            elif command.startswith("schedule_post|"):
+                result_msg = run_schedule_post(command.split("|", 1)[1])
             else:
                 error = f"Unknown command: {command}"
                 logger.warning("Command queue: %s", error)
@@ -1312,7 +1319,11 @@ def run_cleanup_commands() -> None:
         logger.exception("Cleanup: failed to prune pipeline_commands")
 
 
-def run_infographic_pipeline(command: str = "create_infographic", topic: str | None = None) -> str:
+def run_infographic_pipeline(
+    command: str = "create_infographic",
+    topic: str | None = None,
+    manual: bool = True,
+) -> str:
     """Generate a data-driven infographic Reel and schedule it for publishing.
 
     *command* encodes the target platform(s):
@@ -1321,6 +1332,9 @@ def run_infographic_pipeline(command: str = "create_infographic", topic: str | N
       "create_infographic_fb"       → Facebook Reel only
       "create_infographic_static"   → Static image post on Instagram
     *topic* overrides the agent's automatic daily-rotation topic selection.
+    *manual* — when True (default, since infographics are always dashboard-triggered),
+    posts land in ``manual_ready`` status for the Generated tab rather than being
+    auto-scheduled immediately.
     """
     from agents.infographic_agent import InfographicAgent
     from agents.scheduler_agent import SchedulerAgent
@@ -1372,22 +1386,66 @@ def run_infographic_pipeline(command: str = "create_infographic", topic: str | N
     created = 0
     for post in posts:
         try:
-            scheduler_agent.schedule(post, after=last_slot.get(post.platform))
-            last_slot[post.platform] = post.scheduled_time
-            db.insert(post)
+            if manual:
+                post.mark(PostStatus.MANUAL_READY)
+                db.insert(post)
+                logger.info(
+                    "Infographic pipeline: %s post %s → Generated tab (manual_ready)",
+                    post.platform,
+                    post.id,
+                )
+            else:
+                scheduler_agent.schedule(post, after=last_slot.get(post.platform))
+                last_slot[post.platform] = post.scheduled_time
+                db.insert(post)
+                logger.info(
+                    "Infographic pipeline: scheduled %s post %s at %s",
+                    post.platform,
+                    post.id,
+                    post.scheduled_time,
+                )
             created += 1
-            logger.info(
-                "Infographic pipeline: scheduled %s reel %s at %s",
-                post.platform,
-                post.id,
-                post.scheduled_time,
-            )
         except Exception:
             logger.exception("Infographic pipeline: failed to persist post %s", post.id)
 
-    msg = f"infographic: created {created} reel post(s)"
+    dest = "Generated tab" if manual else "Scheduled"
+    msg = f"infographic: created {created} post(s) → {dest}"
     logger.info("=== Infographic pipeline finished: %s ===", msg)
     return msg
+
+
+def run_schedule_post(post_id: str) -> str:
+    """Schedule a single ``manual_ready`` post using the auto-scheduler.
+
+    Called when the user clicks "Add to Schedule" in the Generated tab.
+    Finds the next optimal slot after everything already queued and
+    transitions the post from ``manual_ready`` → ``scheduled``.
+    """
+    from agents.scheduler_agent import SchedulerAgent
+
+    logger.info("Scheduling manual post %s", post_id)
+    db = get_database()
+    try:
+        rows = db.table("posts").select("*").eq("id", post_id).execute().data or []
+        if not rows:
+            return f"post {post_id} not found"
+        post = Post.from_row(rows[0])
+        scheduler_agent = SchedulerAgent()
+        last_slot = db.latest_scheduled_time_by_platform()
+        scheduler_agent.schedule(post, after=last_slot.get(post.platform))
+        db.table("posts").update(
+            {
+                "status": PostStatus.SCHEDULED.value,
+                "scheduled_time": post.scheduled_time.isoformat() if post.scheduled_time else None,
+                "updated_at": datetime.now(UTC).isoformat(),
+            }
+        ).eq("id", post_id).execute()
+        ts = post.scheduled_time.strftime("%a %d %b %H:%M") if post.scheduled_time else "unknown"
+        logger.info("Post %s scheduled for %s", post_id, ts)
+        return f"scheduled for {ts}"
+    except Exception as exc:
+        logger.exception("Failed to schedule post %s", post_id)
+        return f"scheduling failed: {exc}"
 
 
 def run_token_refresh() -> str:

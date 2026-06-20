@@ -633,6 +633,7 @@ pending = by_status(topics, "pending_approval")
 approved_t = by_status(topics, "approved")
 in_progress = by_status(posts, "content_ready", "media_ready")
 scheduled = by_status(posts, "scheduled")
+generated = by_status(posts, "manual_ready")
 published = by_status(posts, "published")
 failed = by_status(posts, "failed")
 
@@ -1213,6 +1214,7 @@ def _post_card(
     tab_topics,
     tab_progress,
     tab_scheduled,
+    tab_generated,
     tab_calendar,
     tab_published,
     tab_analytics,
@@ -1222,6 +1224,7 @@ def _post_card(
         "Topics",
         "In Progress",
         "Scheduled",
+        f"Generated{f' ({len(generated)})' if generated else ''}",
         "Calendar",
         "Published",
         "Analytics",
@@ -1438,6 +1441,77 @@ with tab_scheduled:
                                 pass
                         if pid and st.button(
                             "Dismiss", key=f"dismiss_sched_{pid}", use_container_width=True
+                        ):
+                            db.table("posts").update({"status": "dismissed"}).eq(
+                                "id", pid
+                            ).execute()
+                            st.cache_data.clear()
+                            st.rerun()
+
+# ── Generated ─────────────────────────────────────────────────────────────────
+
+with tab_generated:
+    if not generated:
+        st.info(
+            "No manually generated posts yet. "
+            "Use Generate Infographic or Generate Posts to create content — "
+            "it will appear here for you to review before posting."
+        )
+    else:
+        st.markdown(
+            f"<div style='font-size:13px;color:{SLATE};margin-bottom:12px'>"
+            f"{len(generated)} post(s) ready — choose to post immediately or "
+            f"add to the schedule queue.</div>",
+            unsafe_allow_html=True,
+        )
+        gen_sorted = sorted(generated, key=lambda p: p.get("created_at") or "", reverse=True)
+        cols = st.columns(3)
+        for i, p in enumerate(gen_sorted):
+            with cols[i % 3]:
+                with st.container(border=True):
+                    _post_card(p, "Ready to post", "manual_ready")
+                    pid = p.get("id", "")
+                    if pid:
+                        btn1, btn2 = st.columns(2)
+                        with btn1:
+                            if st.button(
+                                "📤 Post Now",
+                                key=f"gen_postnow_{pid}",
+                                use_container_width=True,
+                                type="primary",
+                                help="Publish to the platform within ~2 minutes.",
+                            ):
+                                db.table("posts").update(
+                                    {
+                                        "status": "scheduled",
+                                        "scheduled_time": datetime.now(UTC).isoformat(),
+                                    }
+                                ).eq("id", pid).execute()
+                                try:
+                                    _queue_command("publish", cooldown_key=f"pub_{pid}")
+                                except RuntimeError:
+                                    pass
+                                st.cache_data.clear()
+                                st.rerun()
+                        with btn2:
+                            if st.button(
+                                "📅 Schedule",
+                                key=f"gen_sched_{pid}",
+                                use_container_width=True,
+                                help="Let the auto-scheduler find the next optimal slot.",
+                            ):
+                                try:
+                                    _queue_command(
+                                        f"schedule_post|{pid}",
+                                        cooldown_key=f"schedpost_{pid}",
+                                    )
+                                    st.success("Scheduling… check the Scheduled tab shortly.")
+                                except RuntimeError:
+                                    st.warning("Already scheduling this post.")
+                        if st.button(
+                            "Dismiss",
+                            key=f"gen_dismiss_{pid}",
+                            use_container_width=True,
                         ):
                             db.table("posts").update({"status": "dismissed"}).eq(
                                 "id", pid
