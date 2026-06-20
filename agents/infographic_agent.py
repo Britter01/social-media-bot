@@ -213,6 +213,8 @@ class InfographicAgent:
                 self._storage = get_storage(cfg)
             except Exception:
                 logger.warning("InfographicAgent: Supabase Storage unavailable", exc_info=True)
+        # In-memory background cache — avoids repeat Supabase downloads within a process run
+        self._bg_mem_cache: dict[str, bytes] = {}
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -421,14 +423,52 @@ class InfographicAgent:
         return f"bg_cache/{pillar}_{ar_slug}.png"
 
     def _generate_background(self, topic: str, aspect_ratio: str = "9:16") -> tuple[bytes, str]:
-        """Return (image_bytes, source) where source is 'cache', 'imagen_3', or 'higgsfield'."""
-        cache_key = self._bg_cache_key(topic, aspect_ratio)
-        if self._storage is not None:
-            cached = self._storage.download(cache_key)
-            if cached:
-                logger.info("InfographicAgent: background cache hit %s", cache_key)
-                return cached, "cache"
+        """Return (image_bytes, source) — source is 'cache', 'imagen_3', or 'higgsfield'.
 
+        Cache priority:
+          1. In-memory (free, per-process)
+          2. Supabase storage (persistent across restarts)
+          3. Image API (only on a genuine cache miss — never on a transient error)
+
+        If the cache key exists in Supabase but the download fails after 3 retries,
+        this raises rather than silently consuming an API credit.
+        """
+        cache_key = self._bg_cache_key(topic, aspect_ratio)
+
+        # 1. In-memory hit — zero cost, instant
+        if cache_key in self._bg_mem_cache:
+            logger.info("InfographicAgent: background memory-cache hit %s", cache_key)
+            return self._bg_mem_cache[cache_key], "cache"
+
+        # 2. Supabase hit — retry on transient errors; raise rather than fall through
+        if self._storage is not None:
+            last_exc: Exception | None = None
+            for attempt in range(3):
+                try:
+                    cached = self._storage.download(cache_key)
+                    if cached:
+                        logger.info("InfographicAgent: background Supabase hit %s", cache_key)
+                        self._bg_mem_cache[cache_key] = cached
+                        return cached, "cache"
+                    break  # download() returned None → genuine 404, no point retrying
+                except Exception as exc:
+                    last_exc = exc
+                    wait = 2**attempt
+                    logger.warning(
+                        "InfographicAgent: cache error (attempt %d/3): %s — retry in %ds",
+                        attempt + 1,
+                        exc,
+                        wait,
+                    )
+                    time.sleep(wait)
+            else:
+                # All 3 retries raised — cache is unreachable; refuse to burn API credits
+                raise RuntimeError(
+                    f"Background cache {cache_key!r} is unreachable after 3 attempts. "
+                    "Check Supabase Storage connectivity."
+                ) from last_exc
+
+        # 3. Genuine cache miss — generate via API once, then store everywhere
         source = "imagen_3"
         if self._cfg.higgsfield_api_key:
             try:
@@ -440,12 +480,15 @@ class InfographicAgent:
         else:
             bg_bytes = self._imagen_background(topic, aspect_ratio)
 
+        self._bg_mem_cache[cache_key] = bg_bytes
         if self._storage is not None:
             try:
                 self._storage.upload(cache_key, bg_bytes, content_type="image/png")
-                logger.info("InfographicAgent: cached background at %s", cache_key)
+                logger.info("InfographicAgent: background persisted to cache at %s", cache_key)
             except Exception:
-                logger.warning("InfographicAgent: failed to cache background", exc_info=True)
+                logger.warning(
+                    "InfographicAgent: failed to persist background cache", exc_info=True
+                )
 
         return bg_bytes, source
 

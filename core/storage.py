@@ -35,11 +35,19 @@ class Storage:
         logger.info("Storage ready (bucket=%s) at %s", self._bucket, cfg.supabase_url)
 
     def download(self, path: str) -> bytes | None:
-        """Download bytes from ``path`` in the bucket. Returns None if not found."""
+        """Download bytes from ``path`` in the bucket.
+
+        Returns None if the object does not exist (404).
+        Re-raises on any other error so callers can distinguish a genuine
+        cache miss from a transient connectivity problem.
+        """
         try:
             return self._client.storage.from_(self._bucket).download(path)
-        except Exception:
-            return None
+        except Exception as exc:
+            msg = str(exc).lower()
+            if "not found" in msg or "404" in msg or "object not found" in msg:
+                return None
+            raise
 
     def upload(
         self,
