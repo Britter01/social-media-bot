@@ -630,6 +630,9 @@ class InfographicAgent:
             },
             timeout=30,
         )
+        if not resp.ok:
+            body = resp.text[:1000]
+            logger.error("Higgsfield /text2image/soul %s error body: %s", resp.status_code, body)
         resp.raise_for_status()
         data = resp.json()
 
@@ -1983,6 +1986,11 @@ class InfographicAgent:
             },
             timeout=30,
         )
+        if not resp.ok:
+            body = resp.text[:1000]
+            logger.error(
+                "Higgsfield spot /text2image/soul %s error body: %s", resp.status_code, body
+            )
         resp.raise_for_status()
         data = resp.json()
         request_id = data.get("request_id") or data.get("id")
