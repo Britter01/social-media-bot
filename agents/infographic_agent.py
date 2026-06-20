@@ -409,14 +409,41 @@ class InfographicAgent:
 
     # ── Background generation ──────────────────────────────────────────────────
 
+    def _bg_cache_key(self, topic: str, aspect_ratio: str) -> str:
+        pillar = "default"
+        for pillar_name in _BG_PROMPTS:
+            if any(kw in topic.lower() for kw in pillar_name.lower().split()):
+                pillar = pillar_name.lower().replace(" ", "_")
+                break
+        ar_slug = aspect_ratio.replace(":", "x")
+        return f"bg_cache/{pillar}_{ar_slug}.png"
+
     def _generate_background(self, topic: str, aspect_ratio: str = "9:16") -> bytes:
-        """Generate one Higgsfield background image for all cards."""
+        """Return a background image, using a Supabase-cached copy when available."""
+        cache_key = self._bg_cache_key(topic, aspect_ratio)
+        if self._storage is not None:
+            cached = self._storage.download(cache_key)
+            if cached:
+                logger.info("InfographicAgent: background cache hit %s", cache_key)
+                return cached
+
         if self._cfg.higgsfield_api_key:
             try:
-                return self._higgsfield_background(topic, aspect_ratio)
+                bg_bytes = self._higgsfield_background(topic, aspect_ratio)
             except Exception:
                 logger.warning("InfographicAgent: Higgsfield failed; trying Imagen", exc_info=True)
-        return self._imagen_background(topic, aspect_ratio)
+                bg_bytes = self._imagen_background(topic, aspect_ratio)
+        else:
+            bg_bytes = self._imagen_background(topic, aspect_ratio)
+
+        if self._storage is not None:
+            try:
+                self._storage.upload(cache_key, bg_bytes, content_type="image/png")
+                logger.info("InfographicAgent: cached background at %s", cache_key)
+            except Exception:
+                logger.warning("InfographicAgent: failed to cache background", exc_info=True)
+
+        return bg_bytes
 
     def _higgsfield_background(self, topic: str, aspect_ratio: str = "9:16") -> bytes:
         prompt = _BG_DEFAULT

@@ -34,6 +34,13 @@ class Storage:
         self._client = create_client(cfg.supabase_url, cfg.supabase_key)
         logger.info("Storage ready (bucket=%s) at %s", self._bucket, cfg.supabase_url)
 
+    def download(self, path: str) -> bytes | None:
+        """Download bytes from ``path`` in the bucket. Returns None if not found."""
+        try:
+            return self._client.storage.from_(self._bucket).download(path)
+        except Exception:
+            return None
+
     def upload(
         self,
         path: str,
