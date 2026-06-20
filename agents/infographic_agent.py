@@ -234,6 +234,61 @@ class _TipsPlan(BaseModel):
     )
 
 
+class _RichStat(BaseModel):
+    value: str = Field(description="Key metric — e.g. '73%' or '$4.4T'. Max 8 chars.")
+    label: str = Field(description="What the stat means — max 8 words.")
+    source: str = Field(default="", description="Attribution — max 5 words.")
+
+
+class _RichSlidePlan(BaseModel):
+    topic_title: str = Field(description="Punchy topic name — max 5 words, no emojis.")
+    hook: str = Field(description="Compelling subheadline — max 10 words, no emojis.")
+    caption: str = Field(description="Instagram caption — 2-3 warm, conversational sentences.")
+    hashtags: list[str] = Field(description="12 relevant hashtags without the # prefix.")
+    layout: str = Field(
+        description=(
+            "Visual layout variant — choose ONE: 'magazine' (two-column, text left / images right), "
+            "'dashboard' (stats-led data cards), 'editorial' (quote-hero with supporting evidence). "
+            "Pick whichever best suits this topic's content."
+        )
+    )
+    bg_prompt: str = Field(
+        description=(
+            "Higgsfield text2image prompt for the 1:1 square background image. "
+            "Make it dramatic, cinematic, topic-relevant. End with 'no text, no letters, no words'."
+        )
+    )
+    spot_prompts: list[str] = Field(
+        description=(
+            "Exactly 2 Higgsfield text2image prompts for small circular spot illustrations. "
+            "Each: vivid, topic-relevant conceptual image, cinematic quality. "
+            "End each with 'no text, no letters'. Make them visually distinct from each other."
+        )
+    )
+    stats: list[_RichStat] = Field(
+        description="2-4 key statistics from the research. Most surprising or compelling first."
+    )
+    bullets_title: str = Field(
+        default="",
+        description="Title for the bullet-list section — max 5 words. Leave blank if no bullets.",
+    )
+    bullets: list[str] = Field(
+        default_factory=list,
+        description=(
+            "3-5 bullet-point facts or takeaways. Each max 10 words, no emojis. "
+            "Leave empty if no bullet list is needed."
+        ),
+    )
+    quote: str = Field(
+        default="",
+        description="Compelling insight or pull-quote — max 18 words. Blank if nothing strong.",
+    )
+    quote_attribution: str = Field(
+        default="",
+        description="Quote source or speaker — max 5 words.",
+    )
+
+
 # ── Font paths (reuse core/image_utils paths) ──────────────────────────────────
 _ASSETS = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "assets"))
 _FONTS = os.path.join(_ASSETS, "fonts")
@@ -279,6 +334,16 @@ class InfographicAgent:
         """
         topic = topic or self._pick_topic()
         logger.info("InfographicAgent: starting %s infographic for topic=%r", fmt, topic)
+
+        if fmt in ("rich_dark", "rich_light"):
+            theme = "dark" if fmt == "rich_dark" else "light"
+            rich_plan = self._research_and_plan_rich(topic)
+            logger.info(
+                "InfographicAgent: rich slide plan '%s' (%s layout)",
+                rich_plan.topic_title,
+                rich_plan.layout,
+            )
+            return self._create_rich_posts(topic, rich_plan, platforms, theme)
 
         if fmt in ("wheel", "dark", "light"):
             n_items = 8 if fmt == "light" else 6
@@ -1825,4 +1890,853 @@ class InfographicAgent:
             crop_bars=False,
             corner="bottom_right",
             logo_scale=1.2,
+        )
+
+    # ── Rich Slide ─────────────────────────────────────────────────────────────
+
+    def _research_and_plan_rich(self, topic: str) -> _RichSlidePlan:
+        """Web-search for current data then synthesise a rich one-page slide plan."""
+        import anthropic as _ant
+
+        client = _ant.Anthropic(api_key=self._cfg.anthropic_api_key)
+
+        messages: list[dict] = [
+            {
+                "role": "user",
+                "content": (
+                    f"Research the very latest information and statistics about: {topic}. "
+                    "Find specific current numbers (2025-2026), surprising facts, expert quotes "
+                    "or key insights, and trend data. I need specific, non-generic, verifiable "
+                    "information that would make someone stop scrolling on Instagram."
+                ),
+            }
+        ]
+
+        continuations = 0
+        while continuations < _MAX_WEB_CONTINUATIONS:
+            response = client.messages.create(
+                model=self._cfg.model_creative,
+                max_tokens=3000,
+                tools=[_WEB_SEARCH_TOOL],
+                messages=messages,
+            )
+            if response.stop_reason != "pause_turn":
+                break
+            messages.append({"role": "assistant", "content": response.content})
+            continuations += 1
+
+        raw_research = "\n".join(
+            getattr(b, "text", "") for b in response.content if hasattr(b, "text")
+        )
+
+        plan_tool = {
+            "name": "create_rich_slide_plan",
+            "description": "Create a rich one-page infographic slide plan from research findings.",
+            "input_schema": _RichSlidePlan.model_json_schema(),
+        }
+        plan_response = client.messages.create(
+            model=self._cfg.model_creative,
+            max_tokens=2000,
+            system=(
+                "You are a premium social media graphic designer for Brite Tech Lifestyle — "
+                "a brand that makes technology feel exciting and accessible. "
+                "Given research, create a rich one-page infographic slide plan. "
+                "Choose the layout that best fits the content ('magazine', 'dashboard', or 'editorial'). "
+                "Write dramatic, topic-specific Higgsfield image prompts. "
+                "Pack every section with current, specific, non-generic data. No emojis anywhere."
+            ),
+            tools=[plan_tool],
+            tool_choice={"type": "tool", "name": "create_rich_slide_plan"},
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        f"Topic: {topic}\n\nResearch:\n{raw_research}\n\n"
+                        "Design a rich one-page infographic slide packed with current data. "
+                        "Generate dramatic Higgsfield image prompts. Choose the best layout."
+                    ),
+                }
+            ],
+        )
+        for block in plan_response.content:
+            if (
+                getattr(block, "type", None) == "tool_use"
+                and block.name == "create_rich_slide_plan"
+            ):
+                return _RichSlidePlan(**block.input)
+        raise RuntimeError("InfographicAgent: rich slide plan tool call returned no result")
+
+    def _higgsfield_spot_image(self, prompt: str) -> bytes:
+        """Generate a spot image via Higgsfield only — raises on any failure, no Imagen fallback."""
+        if not self._cfg.higgsfield_api_key:
+            raise RuntimeError(
+                "HIGGSFIELD_API_KEY not set — Rich slides require Higgsfield for all images."
+            )
+        headers = {
+            "Authorization": f"Key {self._cfg.higgsfield_api_key}",
+            "Content-Type": "application/json",
+        }
+        resp = _req.post(
+            f"{_GRAPH}/v1/text2image/soul",
+            headers=headers,
+            json={
+                "prompt": prompt,
+                "aspect_ratio": "1:1",
+                "quality": "HD",
+                "batch_size": "SINGLE",
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        request_id = data.get("request_id") or data.get("id")
+        if not request_id:
+            raise RuntimeError(f"Higgsfield spot: no request_id in response: {data}")
+
+        poll_url = f"{_GRAPH}/requests/{request_id}/status"
+        headers_poll = {"Authorization": f"Key {self._cfg.higgsfield_api_key}"}
+        deadline = time.time() + 300
+        interval = 2.0
+        while time.time() < deadline:
+            time.sleep(interval)
+            interval = min(interval * 1.5, 10)
+            s = _req.get(poll_url, headers=headers_poll, timeout=15)
+            s.raise_for_status()
+            sd = s.json()
+            status = sd.get("status", "")
+            if status == "completed":
+                images = sd.get("images") or []
+                if not images:
+                    raise RuntimeError("Higgsfield spot: completed but returned no images")
+                image_url = images[0].get("url") or images[0]
+                ir = _req.get(image_url, timeout=30)
+                ir.raise_for_status()
+                return ir.content
+            if status in ("failed", "nsfw"):
+                raise RuntimeError(f"Higgsfield spot generation {status}: {sd}")
+        raise RuntimeError("Higgsfield spot image timed out after 5 minutes")
+
+    def _create_rich_posts(
+        self,
+        topic: str,
+        plan: _RichSlidePlan,
+        platforms: list[str] | None,
+        theme: str,
+    ) -> list[Post]:
+        """Generate background + spot images via Higgsfield, compose, upload, return Posts."""
+        if platforms is None:
+            configured = set(self._cfg.configured_platforms())
+            platforms = [
+                p
+                for p in [Platform.INSTAGRAM.value, Platform.FACEBOOK.value]
+                if p in configured
+            ] or [Platform.INSTAGRAM.value]
+
+        logger.info("InfographicAgent: generating rich slide background via Higgsfield")
+        try:
+            bg_bytes = self._higgsfield_spot_image(plan.bg_prompt)
+        except RuntimeError as exc:
+            raise RuntimeError(
+                f"Rich slide failed — Higgsfield could not generate the background: {exc}"
+            ) from exc
+
+        spot_bytes_list: list[bytes] = []
+        prompts = (plan.spot_prompts or [])[:2]
+        for i, prompt in enumerate(prompts):
+            logger.info(
+                "InfographicAgent: generating rich spot image %d/%d", i + 1, len(prompts)
+            )
+            try:
+                spot_bytes_list.append(self._higgsfield_spot_image(prompt))
+            except RuntimeError as exc:
+                raise RuntimeError(
+                    f"Rich slide failed — Higgsfield could not generate spot image {i + 1}: {exc}. "
+                    "Rich slides require Higgsfield for all images. "
+                    "Check HIGGSFIELD_API_KEY and Higgsfield service status."
+                ) from exc
+
+        image_bytes = self._compose_rich_slide(bg_bytes, spot_bytes_list, plan, theme)
+        logger.info("InfographicAgent: composed rich %s slide (%d bytes)", theme, len(image_bytes))
+
+        image_url = self._upload_image(image_bytes, topic)
+        if not image_url:
+            raise RuntimeError("InfographicAgent: rich slide image upload failed")
+
+        post_type = f"infographic_rich_{theme}"
+        posts: list[Post] = []
+        for plat in platforms:
+            post = Post(
+                pillar="AI Guide",
+                platform=plat,
+                topic=topic,
+                title=plan.topic_title,
+                caption=plan.caption,
+                hashtags=plan.hashtags,
+                thumbnail_url=image_url,
+                post_type=post_type,
+                status=PostStatus.CONTENT_READY.value,
+                meta={"bg_source": "higgsfield", "layout": plan.layout},
+            )
+            posts.append(post)
+            logger.info("InfographicAgent: created %s %s post %s", plat, post_type, post.id)
+        return posts
+
+    def _compose_rich_slide(
+        self,
+        bg_bytes: bytes,
+        spot_bytes_list: list[bytes],
+        plan: _RichSlidePlan,
+        theme: str,
+    ) -> bytes:
+        """Dispatch to the layout renderer based on plan.layout."""
+        layout = plan.layout if plan.layout in ("magazine", "dashboard", "editorial") else "magazine"
+        if layout == "dashboard":
+            return self._rich_dashboard(bg_bytes, spot_bytes_list, plan, theme)
+        if layout == "editorial":
+            return self._rich_editorial(bg_bytes, spot_bytes_list, plan, theme)
+        return self._rich_magazine(bg_bytes, spot_bytes_list, plan, theme)
+
+    @staticmethod
+    def _make_spot_circle(img_bytes: bytes, diameter: int) -> "object":
+        """Convert image bytes to a circular RGBA thumbnail (PIL Image)."""
+        from PIL import Image, ImageDraw
+
+        img = (
+            Image.open(io.BytesIO(img_bytes))
+            .convert("RGBA")
+            .resize((diameter, diameter), Image.LANCZOS)
+        )
+        mask = Image.new("L", (diameter, diameter), 0)
+        ImageDraw.Draw(mask).ellipse([(0, 0), (diameter - 1, diameter - 1)], fill=255)
+        img.putalpha(mask)
+        return img
+
+    def _rich_bg_base(self, bg_bytes: bytes, theme: str) -> "object":
+        """Apply theme-appropriate overlay to the Higgsfield background (returns PIL RGBA Image)."""
+        from PIL import Image, ImageFilter
+
+        W = H = 1080
+        bg = Image.open(io.BytesIO(bg_bytes)).convert("RGB").resize((W, H), Image.LANCZOS)
+        if theme == "dark":
+            overlay = Image.new("RGBA", (W, H), (6, 8, 22, 195))
+            return Image.alpha_composite(bg.convert("RGBA"), overlay)
+        bg_soft = bg.filter(ImageFilter.GaussianBlur(radius=5))
+        wash = Image.new("RGBA", (W, H), (250, 248, 244, 202))
+        return Image.alpha_composite(bg_soft.convert("RGBA"), wash)
+
+    def _rich_magazine(
+        self,
+        bg_bytes: bytes,
+        spot_bytes_list: list[bytes],
+        plan: _RichSlidePlan,
+        theme: str,
+    ) -> bytes:
+        """Two-column magazine layout: text content left, spot images + stats right."""
+        from PIL import Image, ImageDraw
+
+        from core.image_utils import _fit_lines, _load_font, add_brand_overlay
+
+        W = H = 1080
+        PAD = 32
+        HEADER_H = 215
+        COL_GAP = 18
+        LEFT_W = 610
+        RIGHT_W = W - PAD * 2 - LEFT_W - COL_GAP  # ~388
+        CONTENT_TOP = HEADER_H + 14
+
+        if theme == "dark":
+            TXT_MAIN = (255, 255, 255, 255)
+            TXT_BODY = (185, 192, 210, 225)
+            ACCENT = _ACCENT_PALETTE[0]
+            CARD_A = 22
+        else:
+            TXT_MAIN = (18, 18, 32, 255)
+            TXT_BODY = (68, 70, 86, 230)
+            ACCENT = (28, 78, 200)
+            CARD_A = 195
+
+        comp = self._rich_bg_base(bg_bytes, theme)
+        accents = [_ACCENT_PALETTE[i % len(_ACCENT_PALETTE)] for i in range(4)]
+
+        bar = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        ImageDraw.Draw(bar).rectangle([(0, 0), (W, 5)], fill=(*ACCENT, 255))
+        comp = Image.alpha_composite(comp, bar)
+        draw = ImageDraw.Draw(comp)
+
+        font_hl, hl_lines, hl_sz = _fit_lines(
+            draw,
+            _strip_emojis(plan.topic_title).upper(),
+            _FONT_HEADLINE,
+            max(60, int(H * 0.058)),
+            max(40, int(H * 0.038)),
+            W - PAD * 2,
+            max_lines=2,
+        )
+        ty = PAD + 14
+        for line in hl_lines:
+            draw.text((PAD, ty), line, font=font_hl, fill=TXT_MAIN)
+            ty += int(hl_sz * 1.05)
+        draw.text(
+            (PAD, ty + 6),
+            _strip_emojis(plan.hook),
+            font=_load_font(_FONT_TAGLINE, max(24, int(H * 0.024))),
+            fill=(*ACCENT, 220) if theme == "dark" else (*ACCENT, 195),
+        )
+
+        dl = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        ImageDraw.Draw(dl).line(
+            [(PAD, HEADER_H), (W - PAD, HEADER_H)], fill=(*ACCENT, 70), width=1
+        )
+        comp = Image.alpha_composite(comp, dl)
+        draw = ImageDraw.Draw(comp)
+
+        # ── Left column: stats → bullets → quote ───────────────────────────────
+        LEFT_X = PAD
+        cy = CONTENT_TOP
+        stats = list(plan.stats or [])
+
+        if stats:
+            n_cols = min(2, len(stats))
+            sw = (LEFT_W - (COL_GAP if n_cols == 2 else 0)) // n_cols
+            font_sv = _load_font(_FONT_HEADLINE, max(48, int(H * 0.048)))
+            font_sl = _load_font(_FONT_BODY, max(16, int(H * 0.016)))
+            font_ss = _load_font(_FONT_TAGLINE, max(13, int(H * 0.013)))
+            for si in range(n_cols):
+                sc = accents[si]
+                sx0 = LEFT_X + si * (sw + COL_GAP)
+                sy0, sx1, sy1 = cy, sx0 + sw, cy + 162
+                card = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+                fill = (*sc, CARD_A) if theme == "dark" else (255, 255, 255, CARD_A)
+                ImageDraw.Draw(card).rectangle([(sx0, sy0), (sx1, sy1)], fill=fill)
+                comp = Image.alpha_composite(comp, card)
+                strip = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+                ImageDraw.Draw(strip).rectangle([(sx0, sy0), (sx0 + 4, sy1)], fill=(*sc, 255))
+                comp = Image.alpha_composite(comp, strip)
+                draw = ImageDraw.Draw(comp)
+                ix = sx0 + 13
+                draw.text(
+                    (ix, sy0 + 10),
+                    _strip_emojis(stats[si].value),
+                    font=font_sv,
+                    fill=(*sc, 255) if theme == "dark" else (*sc, 230),
+                )
+                draw.text((ix, sy0 + 68), _strip_emojis(stats[si].label)[:34], font=font_sl, fill=TXT_MAIN)
+                if stats[si].source:
+                    draw.text((ix, sy0 + 92), _strip_emojis(stats[si].source), font=font_ss, fill=TXT_BODY)
+            cy += 176
+
+        if plan.bullets:
+            if plan.bullets_title:
+                draw.text(
+                    (LEFT_X, cy + 10),
+                    _strip_emojis(plan.bullets_title).upper(),
+                    font=_load_font(_FONT_HEADLINE, max(22, int(H * 0.022))),
+                    fill=(*ACCENT, 255),
+                )
+                cy += 34
+            font_bl = _load_font(_FONT_BODY, max(16, int(H * 0.016)))
+            for bi, bullet in enumerate(plan.bullets[:5]):
+                bc = accents[bi % len(accents)]
+                draw.ellipse([(LEFT_X, cy + 5), (LEFT_X + 11, cy + 16)], fill=(*bc, 230))
+                _, bls, bsz = _fit_lines(
+                    draw, _strip_emojis(bullet), _FONT_BODY, 16, 13, LEFT_W - 20, max_lines=2
+                )
+                for bl in bls:
+                    draw.text((LEFT_X + 18, cy), bl, font=font_bl, fill=TXT_BODY)
+                    cy += int(bsz * 1.28)
+                cy += 3
+
+        if plan.quote and cy + 120 <= H - 60:
+            qy = max(cy + 16, H - 60 - 140)
+            draw.text(
+                (LEFT_X, qy - 8), "“",
+                font=_load_font(_FONT_HEADLINE, 44), fill=(*ACCENT, 150),
+            )
+            font_q = _load_font(_FONT_TAGLINE, max(19, int(H * 0.019)))
+            font_qa = _load_font(_FONT_BODY, max(14, int(H * 0.014)))
+            _, qls, qsz = _fit_lines(
+                draw, _strip_emojis(plan.quote), _FONT_TAGLINE, 19, 15, LEFT_W - 4, max_lines=3
+            )
+            qy2 = qy + 22
+            for ql in qls:
+                draw.text((LEFT_X + 4, qy2), ql, font=font_q, fill=TXT_BODY)
+                qy2 += int(qsz * 1.3)
+            if plan.quote_attribution:
+                draw.text(
+                    (LEFT_X + 8, qy2 + 3),
+                    f"— {_strip_emojis(plan.quote_attribution)}",
+                    font=font_qa, fill=(*ACCENT, 175),
+                )
+
+        # ── Right column: spot 1 → stat 3 → spot 2 → stat 4 ───────────────────
+        RIGHT_X = PAD + LEFT_W + COL_GAP
+        RX_CTR = RIGHT_X + RIGHT_W // 2
+        SPOT_D = 172
+
+        if spot_bytes_list:
+            s1y = CONTENT_TOP + 20
+            ring1 = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            ImageDraw.Draw(ring1).ellipse(
+                [(RX_CTR - SPOT_D // 2 - 4, s1y - 4), (RX_CTR + SPOT_D // 2 + 4, s1y + SPOT_D + 4)],
+                outline=(*accents[0], 185), width=3,
+            )
+            comp = Image.alpha_composite(comp, ring1)
+            s1c = self._make_spot_circle(spot_bytes_list[0], SPOT_D)
+            comp.paste(s1c, (RX_CTR - SPOT_D // 2, s1y), s1c)
+            draw = ImageDraw.Draw(comp)
+
+        if len(stats) >= 3:
+            sc3 = accents[2]
+            s3_y = CONTENT_TOP + SPOT_D + 48
+            font_s3v = _load_font(_FONT_HEADLINE, max(40, int(H * 0.040)))
+            font_s3l = _load_font(_FONT_BODY, max(14, int(H * 0.014)))
+            draw.text(
+                (RX_CTR, s3_y), _strip_emojis(stats[2].value), font=font_s3v,
+                fill=(*sc3, 255) if theme == "dark" else (*sc3, 230), anchor="mm",
+            )
+            draw.text(
+                (RX_CTR, s3_y + 48), _strip_emojis(stats[2].label)[:28],
+                font=font_s3l, fill=TXT_BODY, anchor="mm",
+            )
+
+        if len(spot_bytes_list) >= 2:
+            s2y = H - 60 - SPOT_D - 20
+            ring2 = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            ImageDraw.Draw(ring2).ellipse(
+                [(RX_CTR - SPOT_D // 2 - 4, s2y - 4), (RX_CTR + SPOT_D // 2 + 4, s2y + SPOT_D + 4)],
+                outline=(*accents[1], 185), width=3,
+            )
+            comp = Image.alpha_composite(comp, ring2)
+            s2c = self._make_spot_circle(spot_bytes_list[1], SPOT_D)
+            comp.paste(s2c, (RX_CTR - SPOT_D // 2, s2y), s2c)
+            draw = ImageDraw.Draw(comp)
+
+        if len(stats) >= 4:
+            s4 = stats[3]
+            sc4 = accents[3]
+            s4_base = H - 60 - SPOT_D - 80
+            if s4_base > CONTENT_TOP + 460:
+                draw.text(
+                    (RX_CTR, s4_base - 50), _strip_emojis(s4.value),
+                    font=_load_font(_FONT_HEADLINE, max(34, int(H * 0.034))),
+                    fill=(*sc4, 255) if theme == "dark" else (*sc4, 230), anchor="mm",
+                )
+                draw.text(
+                    (RX_CTR, s4_base - 8), _strip_emojis(s4.label)[:28],
+                    font=_load_font(_FONT_BODY, max(13, int(H * 0.013))),
+                    fill=TXT_BODY, anchor="mm",
+                )
+
+        draw = ImageDraw.Draw(comp)
+        draw.text((PAD, H - 36), "britetechlifestyle.com", font=_load_font(_FONT_BODY, 17), fill=(*ACCENT, 150))
+
+        out_r = io.BytesIO()
+        comp.convert("RGB").save(out_r, format="PNG")
+        return add_brand_overlay(
+            out_r.getvalue(), self._cfg.brand_name, crop_bars=False,
+            corner="top_right", logo_scale=1.2, logo_top_pad=80,
+        )
+
+    def _rich_dashboard(
+        self,
+        bg_bytes: bytes,
+        spot_bytes_list: list[bytes],
+        plan: _RichSlidePlan,
+        theme: str,
+    ) -> bytes:
+        """Stats-forward dashboard: header → 3-stat row → [spot|bullets|spot] → quote footer."""
+        from PIL import Image, ImageDraw
+
+        from core.image_utils import _fit_lines, _load_font, add_brand_overlay
+
+        W = H = 1080
+        PAD = 32
+        HEADER_H = 196
+        STATS_H = 208
+        MID_H = 288
+        QUOTE_H = 180
+
+        if theme == "dark":
+            TXT_MAIN = (255, 255, 255, 255)
+            TXT_BODY = (185, 192, 210, 225)
+            ACCENT = _ACCENT_PALETTE[0]
+            CARD_A = 22
+        else:
+            TXT_MAIN = (18, 18, 32, 255)
+            TXT_BODY = (68, 70, 86, 230)
+            ACCENT = (28, 78, 200)
+            CARD_A = 195
+
+        comp = self._rich_bg_base(bg_bytes, theme)
+        accents = [_ACCENT_PALETTE[i % len(_ACCENT_PALETTE)] for i in range(4)]
+
+        bar = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        ImageDraw.Draw(bar).rectangle([(0, 0), (W, 5)], fill=(*ACCENT, 255))
+        comp = Image.alpha_composite(comp, bar)
+        draw = ImageDraw.Draw(comp)
+
+        font_hl, hl_lines, hl_sz = _fit_lines(
+            draw,
+            _strip_emojis(plan.topic_title).upper(),
+            _FONT_HEADLINE,
+            max(58, int(H * 0.056)),
+            max(38, int(H * 0.036)),
+            W - PAD * 2,
+            max_lines=2,
+        )
+        ty = PAD + 14
+        for line in hl_lines:
+            draw.text((PAD, ty), line, font=font_hl, fill=TXT_MAIN)
+            ty += int(hl_sz * 1.05)
+        draw.text(
+            (PAD, ty + 5),
+            _strip_emojis(plan.hook),
+            font=_load_font(_FONT_TAGLINE, max(23, int(H * 0.023))),
+            fill=(*ACCENT, 210) if theme == "dark" else (*ACCENT, 195),
+        )
+
+        dl = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        ImageDraw.Draw(dl).line([(PAD, HEADER_H), (W - PAD, HEADER_H)], fill=(*ACCENT, 65), width=1)
+        comp = Image.alpha_composite(comp, dl)
+        draw = ImageDraw.Draw(comp)
+
+        # ── 3-stat row ──────────────────────────────────────────────────────────
+        STATS_TOP = HEADER_H + 10
+        stats = list(plan.stats or [])
+        n_stat_shown = max(1, min(3, len(stats)))
+        STAT_GAP = 10
+        stat_w = (W - PAD * 2 - STAT_GAP * (n_stat_shown - 1)) // n_stat_shown
+        font_sv = _load_font(_FONT_HEADLINE, max(52, int(H * 0.052)))
+        font_sl = _load_font(_FONT_BODY, max(15, int(H * 0.015)))
+        font_ss = _load_font(_FONT_TAGLINE, max(13, int(H * 0.013)))
+
+        for si in range(n_stat_shown):
+            sc = accents[si]
+            sx0 = PAD + si * (stat_w + STAT_GAP)
+            sy0, sx1, sy1 = STATS_TOP, sx0 + stat_w, STATS_TOP + STATS_H
+            card = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            fill = (*sc, CARD_A) if theme == "dark" else (255, 255, 255, CARD_A)
+            ImageDraw.Draw(card).rectangle([(sx0, sy0), (sx1, sy1)], fill=fill)
+            comp = Image.alpha_composite(comp, card)
+            strip = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            ImageDraw.Draw(strip).rectangle([(sx0, sy0), (sx1, sy0 + 4)], fill=(*sc, 255))
+            comp = Image.alpha_composite(comp, strip)
+            draw = ImageDraw.Draw(comp)
+            if si < len(stats):
+                cx_s = (sx0 + sx1) // 2
+                draw.text(
+                    (cx_s, sy0 + 60), _strip_emojis(stats[si].value), font=font_sv,
+                    fill=(*sc, 255) if theme == "dark" else (*sc, 230), anchor="mm",
+                )
+                draw.text(
+                    (cx_s, sy0 + 118), _strip_emojis(stats[si].label)[:26],
+                    font=font_sl, fill=TXT_MAIN, anchor="mm",
+                )
+                if stats[si].source:
+                    draw.text(
+                        (cx_s, sy0 + 143), _strip_emojis(stats[si].source),
+                        font=font_ss, fill=TXT_BODY, anchor="mm",
+                    )
+
+        # ── Middle: [spot1 | bullets | spot2] ───────────────────────────────────
+        MID_TOP = STATS_TOP + STATS_H + 10
+        col_w = (W - PAD * 2 - STAT_GAP * 2) // 3
+        SPOT_D = 172
+
+        if spot_bytes_list:
+            cx1 = PAD + col_w // 2
+            cy1 = MID_TOP + MID_H // 2
+            ring1 = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            ImageDraw.Draw(ring1).ellipse(
+                [(cx1 - SPOT_D // 2 - 4, cy1 - SPOT_D // 2 - 4),
+                 (cx1 + SPOT_D // 2 + 4, cy1 + SPOT_D // 2 + 4)],
+                outline=(*accents[0], 185), width=3,
+            )
+            comp = Image.alpha_composite(comp, ring1)
+            s1c = self._make_spot_circle(spot_bytes_list[0], SPOT_D)
+            comp.paste(s1c, (cx1 - SPOT_D // 2, cy1 - SPOT_D // 2), s1c)
+            draw = ImageDraw.Draw(comp)
+
+        BUL_X = PAD + col_w + STAT_GAP
+        bcy = MID_TOP + 14
+        if plan.bullets:
+            if plan.bullets_title:
+                draw.text(
+                    (BUL_X, bcy), _strip_emojis(plan.bullets_title).upper(),
+                    font=_load_font(_FONT_HEADLINE, max(20, int(H * 0.020))),
+                    fill=(*ACCENT, 255),
+                )
+                bcy += 30
+            font_bl = _load_font(_FONT_BODY, max(15, int(H * 0.015)))
+            for bi, bullet in enumerate(plan.bullets[:5]):
+                bc = accents[bi % len(accents)]
+                draw.ellipse([(BUL_X, bcy + 5), (BUL_X + 10, bcy + 15)], fill=(*bc, 230))
+                _, bls, bsz = _fit_lines(
+                    draw, _strip_emojis(bullet), _FONT_BODY, 15, 12, col_w - 16, max_lines=2
+                )
+                for bl in bls:
+                    draw.text((BUL_X + 16, bcy), bl, font=font_bl, fill=TXT_BODY)
+                    bcy += int(bsz * 1.28)
+                bcy += 3
+
+        if len(spot_bytes_list) >= 2:
+            cx2 = PAD + col_w * 2 + STAT_GAP * 2 + col_w // 2
+            cy2 = MID_TOP + MID_H // 2
+            ring2 = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            ImageDraw.Draw(ring2).ellipse(
+                [(cx2 - SPOT_D // 2 - 4, cy2 - SPOT_D // 2 - 4),
+                 (cx2 + SPOT_D // 2 + 4, cy2 + SPOT_D // 2 + 4)],
+                outline=(*accents[1], 185), width=3,
+            )
+            comp = Image.alpha_composite(comp, ring2)
+            s2c = self._make_spot_circle(spot_bytes_list[1], SPOT_D)
+            comp.paste(s2c, (cx2 - SPOT_D // 2, cy2 - SPOT_D // 2), s2c)
+            draw = ImageDraw.Draw(comp)
+
+        # ── Quote footer ─────────────────────────────────────────────────────────
+        QUOTE_TOP = MID_TOP + MID_H + 10
+        if plan.quote:
+            qpanel = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            qfill = (*ACCENT, 18) if theme == "dark" else (255, 255, 255, 170)
+            ImageDraw.Draw(qpanel).rectangle(
+                [(PAD, QUOTE_TOP), (W - PAD, QUOTE_TOP + QUOTE_H)], fill=qfill
+            )
+            comp = Image.alpha_composite(comp, qpanel)
+            draw = ImageDraw.Draw(comp)
+            draw.text(
+                (PAD + 16, QUOTE_TOP + 10), "“",
+                font=_load_font(_FONT_HEADLINE, 40), fill=(*ACCENT, 155),
+            )
+            font_q = _load_font(_FONT_TAGLINE, max(22, int(H * 0.022)))
+            font_qa = _load_font(_FONT_BODY, max(15, int(H * 0.015)))
+            _, qls, qsz = _fit_lines(
+                draw, _strip_emojis(plan.quote), _FONT_TAGLINE, 22, 17, W - PAD * 2 - 40, max_lines=3
+            )
+            qy = QUOTE_TOP + 30
+            for ql in qls:
+                draw.text((W // 2, qy), ql, font=font_q, fill=TXT_BODY, anchor="mm")
+                qy += int(qsz * 1.3)
+            if plan.quote_attribution:
+                draw.text(
+                    (W // 2, qy + 6),
+                    f"— {_strip_emojis(plan.quote_attribution)}",
+                    font=font_qa, fill=(*ACCENT, 170), anchor="mm",
+                )
+
+        draw = ImageDraw.Draw(comp)
+        draw.text((PAD, H - 36), "britetechlifestyle.com", font=_load_font(_FONT_BODY, 17), fill=(*ACCENT, 150))
+
+        out_d = io.BytesIO()
+        comp.convert("RGB").save(out_d, format="PNG")
+        return add_brand_overlay(
+            out_d.getvalue(), self._cfg.brand_name, crop_bars=False,
+            corner="top_right", logo_scale=1.2, logo_top_pad=80,
+        )
+
+    def _rich_editorial(
+        self,
+        bg_bytes: bytes,
+        spot_bytes_list: list[bytes],
+        plan: _RichSlidePlan,
+        theme: str,
+    ) -> bytes:
+        """Editorial layout: large title + spot top | centred quote | stats row | bullets + spot."""
+        from PIL import Image, ImageDraw
+
+        from core.image_utils import _fit_lines, _load_font, add_brand_overlay
+
+        W = H = 1080
+        PAD = 32
+        TOP_H = 308
+        QUOTE_H = 202
+        STATS_H = 182
+        BOT_H = H - TOP_H - QUOTE_H - STATS_H - 56
+
+        if theme == "dark":
+            TXT_MAIN = (255, 255, 255, 255)
+            TXT_BODY = (185, 192, 210, 225)
+            ACCENT = _ACCENT_PALETTE[0]
+            CARD_A = 22
+        else:
+            TXT_MAIN = (18, 18, 32, 255)
+            TXT_BODY = (68, 70, 86, 230)
+            ACCENT = (28, 78, 200)
+            CARD_A = 195
+
+        comp = self._rich_bg_base(bg_bytes, theme)
+        accents = [_ACCENT_PALETTE[i % len(_ACCENT_PALETTE)] for i in range(4)]
+
+        bar = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        ImageDraw.Draw(bar).rectangle([(0, 0), (W, 5)], fill=(*ACCENT, 255))
+        comp = Image.alpha_composite(comp, bar)
+        draw = ImageDraw.Draw(comp)
+
+        # ── Top row: title left (57%) + spot1 right (43%) ─────────────────────
+        LEFT_W = int(W * 0.57)
+        RIGHT_X = LEFT_W + 16
+
+        draw.text(
+            (PAD, PAD), "britetechlifestyle.com",
+            font=_load_font(_FONT_BODY, 16), fill=(*ACCENT, 145),
+        )
+
+        font_hl, hl_lines, hl_sz = _fit_lines(
+            draw,
+            _strip_emojis(plan.topic_title).upper(),
+            _FONT_HEADLINE,
+            max(60, int(H * 0.058)),
+            max(40, int(H * 0.038)),
+            LEFT_W - PAD,
+            max_lines=3,
+        )
+        ty = PAD + 26
+        for line in hl_lines:
+            draw.text((PAD, ty), line, font=font_hl, fill=TXT_MAIN)
+            ty += int(hl_sz * 1.05)
+        draw.text(
+            (PAD, ty + 6),
+            _strip_emojis(plan.hook),
+            font=_load_font(_FONT_TAGLINE, max(23, int(H * 0.023))),
+            fill=(*ACCENT, 215) if theme == "dark" else (*ACCENT, 195),
+        )
+
+        if spot_bytes_list:
+            SPOT_D1 = 200
+            cx1 = RIGHT_X + (W - RIGHT_X - PAD) // 2
+            cy1 = TOP_H // 2
+            ring1 = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            ImageDraw.Draw(ring1).ellipse(
+                [(cx1 - SPOT_D1 // 2 - 5, cy1 - SPOT_D1 // 2 - 5),
+                 (cx1 + SPOT_D1 // 2 + 5, cy1 + SPOT_D1 // 2 + 5)],
+                outline=(*accents[0], 190), width=4,
+            )
+            comp = Image.alpha_composite(comp, ring1)
+            s1c = self._make_spot_circle(spot_bytes_list[0], SPOT_D1)
+            comp.paste(s1c, (cx1 - SPOT_D1 // 2, cy1 - SPOT_D1 // 2), s1c)
+            draw = ImageDraw.Draw(comp)
+
+        dl = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        ImageDraw.Draw(dl).line([(PAD, TOP_H), (W - PAD, TOP_H)], fill=(*ACCENT, 65), width=1)
+        comp = Image.alpha_composite(comp, dl)
+        draw = ImageDraw.Draw(comp)
+
+        # ── Full-width quote band ────────────────────────────────────────────────
+        QUOTE_TOP = TOP_H + 8
+        if plan.quote:
+            qpanel = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            qfill = (*ACCENT, 20) if theme == "dark" else (255, 255, 255, 168)
+            ImageDraw.Draw(qpanel).rectangle(
+                [(PAD, QUOTE_TOP), (W - PAD, QUOTE_TOP + QUOTE_H)], fill=qfill
+            )
+            comp = Image.alpha_composite(comp, qpanel)
+            draw = ImageDraw.Draw(comp)
+            draw.text(
+                (PAD + 18, QUOTE_TOP + 8), "“",
+                font=_load_font(_FONT_HEADLINE, 52), fill=(*ACCENT, 160),
+            )
+            font_q = _load_font(_FONT_TAGLINE, max(24, int(H * 0.024)))
+            font_qa = _load_font(_FONT_BODY, max(16, int(H * 0.016)))
+            _, qls, qsz = _fit_lines(
+                draw, _strip_emojis(plan.quote), _FONT_TAGLINE, 24, 18, W - PAD * 2 - 40, max_lines=3
+            )
+            qy = QUOTE_TOP + 40
+            for ql in qls:
+                draw.text((W // 2, qy), ql, font=font_q, fill=TXT_BODY, anchor="mm")
+                qy += int(qsz * 1.3)
+            if plan.quote_attribution:
+                draw.text(
+                    (W // 2, qy + 5),
+                    f"— {_strip_emojis(plan.quote_attribution)}",
+                    font=font_qa, fill=(*ACCENT, 170), anchor="mm",
+                )
+
+        dl2 = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        ImageDraw.Draw(dl2).line(
+            [(PAD, QUOTE_TOP + QUOTE_H), (W - PAD, QUOTE_TOP + QUOTE_H)],
+            fill=(*ACCENT, 65), width=1,
+        )
+        comp = Image.alpha_composite(comp, dl2)
+        draw = ImageDraw.Draw(comp)
+
+        # ── Stats row ─────────────────────────────────────────────────────────────
+        STATS_TOP = QUOTE_TOP + QUOTE_H + 8
+        stats = list(plan.stats or [])
+        n_stat_shown = max(1, min(3, len(stats)))
+        STAT_GAP = 10
+        stat_w = (W - PAD * 2 - STAT_GAP * (n_stat_shown - 1)) // n_stat_shown
+        font_sv = _load_font(_FONT_HEADLINE, max(46, int(H * 0.046)))
+        font_sl = _load_font(_FONT_BODY, max(14, int(H * 0.014)))
+
+        for si in range(n_stat_shown):
+            sc = accents[si]
+            sx0 = PAD + si * (stat_w + STAT_GAP)
+            sy0, sx1, sy1 = STATS_TOP, sx0 + stat_w, STATS_TOP + STATS_H
+            card = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            fill = (*sc, CARD_A) if theme == "dark" else (255, 255, 255, CARD_A)
+            ImageDraw.Draw(card).rectangle([(sx0, sy0), (sx1, sy1)], fill=fill)
+            comp = Image.alpha_composite(comp, card)
+            cstrip = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            ImageDraw.Draw(cstrip).rectangle([(sx0, sy0), (sx1, sy0 + 4)], fill=(*sc, 255))
+            comp = Image.alpha_composite(comp, cstrip)
+            draw = ImageDraw.Draw(comp)
+            if si < len(stats):
+                cx_s = (sx0 + sx1) // 2
+                draw.text(
+                    (cx_s, sy0 + 52), _strip_emojis(stats[si].value), font=font_sv,
+                    fill=(*sc, 255) if theme == "dark" else (*sc, 230), anchor="mm",
+                )
+                draw.text(
+                    (cx_s, sy0 + 106), _strip_emojis(stats[si].label)[:28],
+                    font=font_sl, fill=TXT_MAIN, anchor="mm",
+                )
+
+        # ── Bottom: bullets left (53%) + spot2 right (47%) ──────────────────────
+        BOT_TOP = STATS_TOP + STATS_H + 8
+        BOT_LEFT_W = int(W * 0.53)
+        BOT_RIGHT_X = BOT_LEFT_W + 18
+
+        bcy = BOT_TOP + 12
+        if plan.bullets:
+            if plan.bullets_title:
+                draw.text(
+                    (PAD, bcy), _strip_emojis(plan.bullets_title).upper(),
+                    font=_load_font(_FONT_HEADLINE, max(20, int(H * 0.020))),
+                    fill=(*ACCENT, 255),
+                )
+                bcy += 30
+            font_bl = _load_font(_FONT_BODY, max(15, int(H * 0.015)))
+            for bi, bullet in enumerate(plan.bullets[:5]):
+                bc = accents[bi % len(accents)]
+                draw.ellipse([(PAD, bcy + 5), (PAD + 10, bcy + 15)], fill=(*bc, 230))
+                _, bls, bsz = _fit_lines(
+                    draw, _strip_emojis(bullet), _FONT_BODY, 15, 12,
+                    BOT_LEFT_W - PAD - 16, max_lines=2,
+                )
+                for bl in bls:
+                    draw.text((PAD + 16, bcy), bl, font=font_bl, fill=TXT_BODY)
+                    bcy += int(bsz * 1.28)
+                bcy += 3
+
+        if len(spot_bytes_list) >= 2:
+            SPOT_D2 = 180
+            cx2 = BOT_RIGHT_X + (W - BOT_RIGHT_X - PAD) // 2
+            cy2 = BOT_TOP + BOT_H // 2
+            ring2 = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            ImageDraw.Draw(ring2).ellipse(
+                [(cx2 - SPOT_D2 // 2 - 4, cy2 - SPOT_D2 // 2 - 4),
+                 (cx2 + SPOT_D2 // 2 + 4, cy2 + SPOT_D2 // 2 + 4)],
+                outline=(*accents[1], 185), width=3,
+            )
+            comp = Image.alpha_composite(comp, ring2)
+            s2c = self._make_spot_circle(spot_bytes_list[1], SPOT_D2)
+            comp.paste(s2c, (cx2 - SPOT_D2 // 2, cy2 - SPOT_D2 // 2), s2c)
+            draw = ImageDraw.Draw(comp)
+
+        draw = ImageDraw.Draw(comp)
+        draw.text((PAD, H - 36), "britetechlifestyle.com", font=_load_font(_FONT_BODY, 17), fill=(*ACCENT, 145))
+
+        out_e = io.BytesIO()
+        comp.convert("RGB").save(out_e, format="PNG")
+        return add_brand_overlay(
+            out_e.getvalue(), self._cfg.brand_name, crop_bars=False, corner="bottom_right", logo_scale=1.2
         )

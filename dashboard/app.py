@@ -791,6 +791,8 @@ def _render_pipeline_controls(scope: str) -> None:
             "Wheel Style (Instagram)",
             "Dark Panels (Instagram)",
             "Light Magazine (Instagram)",
+            "Rich Slide — Dark (IG+FB)",
+            "Rich Slide — Light (IG+FB)",
         ],
         key=f"{scope}_infog_fmt",
         label_visibility="collapsed",
@@ -803,6 +805,8 @@ def _render_pipeline_controls(scope: str) -> None:
         "Wheel Style (Instagram)": "create_infographic_wheel",
         "Dark Panels (Instagram)": "create_infographic_dark",
         "Light Magazine (Instagram)": "create_infographic_light",
+        "Rich Slide — Dark (IG+FB)": "create_infographic_rich_dark",
+        "Rich Slide — Light (IG+FB)": "create_infographic_rich_light",
     }
     # Topic / category selector
     _INFOG_TOPIC_MAP: dict[str, str | None] = {
@@ -1082,6 +1086,8 @@ def _post_card(
         "infographic_wheel",
         "infographic_dark",
         "infographic_light",
+        "infographic_rich_dark",
+        "infographic_rich_light",
     )
     is_infographic = post.get("post_type") in _INFOGRAPHIC_TYPES
     slides = post.get("slides") or []
@@ -1401,6 +1407,8 @@ with tab_scheduled:
                     "infographic_wheel",
                     "infographic_dark",
                     "infographic_light",
+                    "infographic_rich_dark",
+                    "infographic_rich_light",
                 )
             ]
         elif _type_filter == "Standard":
@@ -1416,6 +1424,8 @@ with tab_scheduled:
                     "infographic_wheel",
                     "infographic_dark",
                     "infographic_light",
+                    "infographic_rich_dark",
+                    "infographic_rich_light",
                 )
             ]
 

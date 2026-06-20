@@ -1348,6 +1348,8 @@ def run_infographic_pipeline(
         "create_infographic_wheel": [Platform.INSTAGRAM.value],
         "create_infographic_dark": [Platform.INSTAGRAM.value],
         "create_infographic_light": [Platform.INSTAGRAM.value],
+        "create_infographic_rich_dark": [Platform.INSTAGRAM.value, Platform.FACEBOOK.value],
+        "create_infographic_rich_light": [Platform.INSTAGRAM.value, Platform.FACEBOOK.value],
     }
     platforms = platform_map.get(command, None)  # None → agent picks defaults
     fmt_map = {
@@ -1355,6 +1357,8 @@ def run_infographic_pipeline(
         "create_infographic_wheel": "wheel",
         "create_infographic_dark": "dark",
         "create_infographic_light": "light",
+        "create_infographic_rich_dark": "rich_dark",
+        "create_infographic_rich_light": "rich_light",
     }
     fmt = fmt_map.get(command, "reel")
 
