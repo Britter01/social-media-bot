@@ -893,7 +893,7 @@ class InfographicAgent:
         accent0 = _ACCENT_PALETTE[0]
 
         font_label = _load_font(_FONT_BODY, 22)
-        draw.text((PAD, PAD), "BRITE TECH LIFESTYLE", font=font_label, fill=(*accent0, 200))
+        draw.text((PAD, PAD), "britetechlifestyle.com", font=font_label, fill=(*accent0, 200))
 
         font_hl, hl_lines, hl_sz = _fit_lines(
             draw,
@@ -1219,7 +1219,7 @@ class InfographicAgent:
         accent0 = (90, 160, 255)
 
         font_lbl = _load_font(_FONT_BODY, 20)
-        draw.text((PAD, PAD), "BRITE TECH LIFESTYLE", font=font_lbl, fill=(*accent0, 190))
+        draw.text((PAD, PAD), "britetechlifestyle.com", font=font_lbl, fill=(*accent0, 190))
 
         font_hl, hl_lines, hl_sz = _fit_lines(
             draw,
@@ -1371,7 +1371,7 @@ class InfographicAgent:
         accent0 = _ACCENT_PALETTE[0]
 
         font_lbl = _load_font(_FONT_BODY, 22)
-        draw.text((PAD, PAD), "BRITE TECH LIFESTYLE", font=font_lbl, fill=(*accent0, 200))
+        draw.text((PAD, PAD), "britetechlifestyle.com", font=font_lbl, fill=(*accent0, 200))
 
         font_hl, hl_lines, hl_sz = _fit_lines(
             draw,
