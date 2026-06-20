@@ -176,56 +176,87 @@ class InfographicAgent:
         self,
         topic: str | None = None,
         platforms: list[str] | None = None,
+        fmt: str = "reel",
     ) -> list[Post]:
         """Full pipeline: research → design → render → return Posts ready for scheduling.
 
-        *platforms* defaults to ["instagram", "facebook"] when both are configured.
-        Returns a list of Post objects (video_url set, status=CONTENT_READY).
-        The caller is responsible for scheduling and persisting them.
+        *fmt* is "reel" (default) or "static".
+        *platforms* defaults to ["instagram", "facebook"] for reels, ["instagram"] for static.
+        Returns Post objects with status=CONTENT_READY; caller schedules and persists them.
         """
-        if platforms is None:
-            configured = set(self._cfg.configured_platforms())
-            platforms = [
-                p for p in [Platform.INSTAGRAM.value, Platform.FACEBOOK.value] if p in configured
-            ]
-            if not platforms:
-                platforms = [Platform.INSTAGRAM.value]
-
         topic = topic or self._pick_topic()
-        logger.info("InfographicAgent: starting infographic for topic=%r", topic)
+        logger.info("InfographicAgent: starting %s infographic for topic=%r", fmt, topic)
 
         plan = self._research_and_plan(topic)
         logger.info("InfographicAgent: planned '%s' — %d cards", plan.topic_title, len(plan.cards))
 
+        if fmt == "static":
+            return self._create_static_posts(topic, plan, platforms)
+        return self._create_reel_posts(topic, plan, platforms)
+
+    def _create_reel_posts(
+        self, topic: str, plan: _InfographicPlan, platforms: list[str] | None
+    ) -> list[Post]:
+        if platforms is None:
+            configured = set(self._cfg.configured_platforms())
+            platforms = [
+                p for p in [Platform.INSTAGRAM.value, Platform.FACEBOOK.value] if p in configured
+            ] or [Platform.INSTAGRAM.value]
+
         bg_bytes = self._generate_background(topic)
         frames = self._compose_all_frames(bg_bytes, plan)
-        logger.info("InfographicAgent: composed %d frames", len(frames))
+        logger.info("InfographicAgent: composed %d reel frames", len(frames))
 
         video_url = self._build_and_upload_reel(frames, topic)
         if not video_url:
             raise RuntimeError("InfographicAgent: reel upload failed")
 
-        caption = plan.caption
-        hashtags = plan.hashtags
-        title = plan.topic_title
-        pillar = "AI Guide"
-
         posts: list[Post] = []
         for plat in platforms:
             post = Post(
-                pillar=pillar,
+                pillar="AI Guide",
                 platform=plat,
                 topic=topic,
-                title=title,
-                caption=caption,
-                hashtags=hashtags,
+                title=plan.topic_title,
+                caption=plan.caption,
+                hashtags=plan.hashtags,
                 video_url=video_url,
                 post_type="infographic_reel",
                 status=PostStatus.CONTENT_READY.value,
             )
             posts.append(post)
-            logger.info("InfographicAgent: created %s reel post %s", plat, post.id)
+            logger.info("InfographicAgent: created %s infographic_reel post %s", plat, post.id)
+        return posts
 
+    def _create_static_posts(
+        self, topic: str, plan: _InfographicPlan, platforms: list[str] | None
+    ) -> list[Post]:
+        if platforms is None:
+            platforms = [Platform.INSTAGRAM.value]
+
+        bg_bytes = self._generate_background(topic, aspect_ratio="1:1")
+        image_bytes = self._compose_static_image(bg_bytes, plan)
+        logger.info("InfographicAgent: composed static image (%d bytes)", len(image_bytes))
+
+        image_url = self._upload_image(image_bytes, topic)
+        if not image_url:
+            raise RuntimeError("InfographicAgent: static image upload failed")
+
+        posts: list[Post] = []
+        for plat in platforms:
+            post = Post(
+                pillar="AI Guide",
+                platform=plat,
+                topic=topic,
+                title=plan.topic_title,
+                caption=plan.caption,
+                hashtags=plan.hashtags,
+                thumbnail_url=image_url,
+                post_type="infographic_static",
+                status=PostStatus.CONTENT_READY.value,
+            )
+            posts.append(post)
+            logger.info("InfographicAgent: created %s infographic_static post %s", plat, post.id)
         return posts
 
     # ── Topic selection ────────────────────────────────────────────────────────
@@ -324,16 +355,16 @@ class InfographicAgent:
 
     # ── Background generation ──────────────────────────────────────────────────
 
-    def _generate_background(self, topic: str) -> bytes:
-        """Generate one Higgsfield 9:16 background image for all cards."""
+    def _generate_background(self, topic: str, aspect_ratio: str = "9:16") -> bytes:
+        """Generate one Higgsfield background image for all cards."""
         if self._cfg.higgsfield_api_key:
             try:
-                return self._higgsfield_background(topic)
+                return self._higgsfield_background(topic, aspect_ratio)
             except Exception:
                 logger.warning("InfographicAgent: Higgsfield failed; trying Imagen", exc_info=True)
-        return self._imagen_background(topic)
+        return self._imagen_background(topic, aspect_ratio)
 
-    def _higgsfield_background(self, topic: str) -> bytes:
+    def _higgsfield_background(self, topic: str, aspect_ratio: str = "9:16") -> bytes:
         prompt = _BG_DEFAULT
         for pillar_name, pillar_prompt in _BG_PROMPTS.items():
             if any(kw in topic.lower() for kw in pillar_name.lower().split()):
@@ -350,7 +381,7 @@ class InfographicAgent:
                 headers=headers,
                 json={
                     "prompt": prompt,
-                    "aspect_ratio": "9:16",
+                    "aspect_ratio": aspect_ratio,
                     "quality": "HD",
                     "batch_size": "SINGLE",
                 },
@@ -388,7 +419,7 @@ class InfographicAgent:
 
         raise RuntimeError("Higgsfield timed out after 5 minutes")
 
-    def _imagen_background(self, topic: str) -> bytes:
+    def _imagen_background(self, topic: str, aspect_ratio: str = "9:16") -> bytes:
         if not self._cfg.google_api_key:
             raise RuntimeError("Neither Higgsfield nor Google API key configured")
         from google import genai
@@ -404,7 +435,7 @@ class InfographicAgent:
         resp = client.models.generate_images(
             model=self._cfg.imagen_model,
             prompt=prompt,
-            config=types.GenerateImagesConfig(number_of_images=1, aspect_ratio="9:16"),
+            config=types.GenerateImagesConfig(number_of_images=1, aspect_ratio=aspect_ratio),
         )
         images = getattr(resp, "generated_images", None) or []
         if not images:
@@ -762,62 +793,212 @@ class InfographicAgent:
             raise RuntimeError("ffmpeg not found on PATH or via imageio-ffmpeg") from exc
 
     def _fetch_music(self) -> str | None:
-        if not self._freesound_key:
+        """Delegate to ReelsAgent's proven Freesound implementation.
+
+        ReelsAgent's _fetch_music handles follow_redirects, magic-byte
+        validation, and broad fallback queries — all confirmed working.
+        Reusing it avoids duplicating that logic here.
+        """
+        try:
+            from agents.reels_agent import ReelsAgent
+
+            return ReelsAgent()._fetch_music("AI Guide")
+        except Exception:
+            logger.warning("InfographicAgent: music fetch failed", exc_info=True)
             return None
-        with httpx.Client(timeout=20.0) as client:
-            for query in _MUSIC_QUERIES:
-                try:
-                    resp = client.get(
-                        _FREESOUND_SEARCH,
-                        params={
-                            "query": query,
-                            "filter": "duration:[20 TO 120]",
-                            "fields": "id,name,previews,duration,license",
-                            "sort": "rating_desc",
-                            "page_size": "5",
-                            "token": self._freesound_key,
-                        },
-                    )
-                    resp.raise_for_status()
-                    results = resp.json().get("results", [])
-                    if not results:
-                        continue
 
-                    track = results[0]
-                    preview_url = track.get("previews", {}).get("preview-hq-mp3") or track.get(
-                        "previews", {}
-                    ).get("preview-lq-mp3")
-                    if not preview_url:
-                        continue
+    # ── Static image composition ───────────────────────────────────────────────
 
-                    audio_resp = client.get(preview_url, timeout=30.0)
-                    audio_resp.raise_for_status()
-                    content = audio_resp.content
-                    if not (
-                        content[:3] == b"ID3"
-                        or (len(content) >= 2 and content[0] == 0xFF and content[1] & 0xE0 == 0xE0)
-                    ):
-                        logger.warning("InfographicAgent: Freesound returned non-MP3 bytes")
-                        continue
+    def _compose_static_image(self, bg_bytes: bytes, plan: _InfographicPlan) -> bytes:
+        """Compose a single 1080×1080 infographic grid with all 4 stats."""
+        from PIL import Image, ImageDraw
 
-                    tmp = tempfile.NamedTemporaryFile(
-                        delete=False, suffix=".mp3", prefix="infog_music_"
-                    )
-                    tmp.write(content)
-                    tmp.close()
-                    logger.info(
-                        "InfographicAgent: music from query=%r track=%r licence=%s",
-                        query,
-                        track.get("name", "?"),
-                        track.get("license", "?"),
-                    )
-                    return tmp.name
+        from core.image_utils import _fit_lines, _load_font, add_brand_overlay
 
-                except Exception:
-                    logger.debug("InfographicAgent: music query %r failed", query, exc_info=True)
+        W = H = 1080
+        PAD = 28
+        HEADER_H = 195
+        GAP = 14
+        CELL_W = (W - PAD * 2 - GAP) // 2  # 504
+        CELL_H = (H - HEADER_H - PAD - GAP) // 2  # ≈ 418
 
-        logger.warning("InfographicAgent: no music found — producing silent Reel")
-        return None
+        bg = Image.open(io.BytesIO(bg_bytes)).convert("RGB").resize((W, H), Image.LANCZOS)
+        overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+
+        # Strong dark overlay so text is always readable
+        dark = Image.new("RGBA", (W, H), (6, 6, 16, 215))
+        overlay = Image.alpha_composite(overlay, dark)
+
+        comp = bg.convert("RGBA")
+        comp = Image.alpha_composite(comp, overlay)
+        draw = ImageDraw.Draw(comp)
+
+        # ── Header ─────────────────────────────────────────────────────────────
+        accent0 = _ACCENT_PALETTE[0]
+
+        font_label = _load_font(_FONT_BODY, 22)
+        draw.text((PAD, PAD), "BRITE TECH LIFESTYLE", font=font_label, fill=(*accent0, 200))
+
+        font_hl, hl_lines, hl_sz = _fit_lines(
+            draw,
+            plan.topic_title.upper(),
+            _FONT_HEADLINE,
+            max(58, int(H * 0.058)),
+            max(40, int(H * 0.038)),
+            W - PAD * 2,
+            max_lines=2,
+        )
+        hl_lh = int(hl_sz * 1.05)
+        text_y = PAD + 36
+        for line in hl_lines:
+            draw.text((PAD, text_y), line, font=font_hl, fill=(255, 255, 255, 255))
+            text_y += hl_lh
+
+        font_hook, hook_lines, hook_sz = _fit_lines(
+            draw,
+            plan.hook,
+            _FONT_TAGLINE,
+            max(26, int(H * 0.026)),
+            max(20, int(H * 0.020)),
+            W - PAD * 2,
+            max_lines=1,
+        )
+        draw.text(
+            (PAD, text_y + 6),
+            hook_lines[0] if hook_lines else "",
+            font=font_hook,
+            fill=(190, 195, 210, 220),
+        )
+
+        # Thin accent divider line below header
+        line_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        ImageDraw.Draw(line_layer).line(
+            [(PAD, HEADER_H - 4), (W - PAD, HEADER_H - 4)],
+            fill=(*accent0, 120),
+            width=2,
+        )
+        comp = Image.alpha_composite(comp, line_layer)
+        draw = ImageDraw.Draw(comp)
+
+        # ── 2×2 stat grid ──────────────────────────────────────────────────────
+        cards = (plan.cards + [None, None, None, None])[:4]
+        for idx, card in enumerate(cards):
+            if card is None:
+                continue
+            col = idx % 2
+            row = idx // 2
+            accent = _ACCENT_PALETTE[idx % len(_ACCENT_PALETTE)]
+
+            x0 = PAD + col * (CELL_W + GAP)
+            y0 = HEADER_H + row * (CELL_H + GAP)
+            x1 = x0 + CELL_W
+            y1 = y0 + CELL_H
+
+            # Semi-transparent tinted cell background
+            cell_bg = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            ImageDraw.Draw(cell_bg).rectangle(
+                [(x0, y0), (x1, y1)],
+                fill=(*accent, 18),  # very faint accent tint
+            )
+            comp = Image.alpha_composite(comp, cell_bg)
+
+            # Left accent bar
+            bar = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            ImageDraw.Draw(bar).rectangle(
+                [(x0, y0), (x0 + 6, y1)],
+                fill=(*accent, 255),
+            )
+            comp = Image.alpha_composite(comp, bar)
+            draw = ImageDraw.Draw(comp)
+
+            inner_x = x0 + 18
+            inner_w = CELL_W - 24
+            cy = y0 + 18
+
+            # Big stat number
+            font_stat, stat_lines, stat_sz = _fit_lines(
+                draw,
+                card.stat,
+                _FONT_HEADLINE,
+                max(68, int(H * 0.068)),
+                max(44, int(H * 0.044)),
+                inner_w,
+                max_lines=1,
+            )
+            for line in stat_lines:
+                draw.text((inner_x, cy), line, font=font_stat, fill=(*accent, 255))
+                cy += int(stat_sz * 1.05)
+
+            cy += 6
+
+            # Headline
+            font_hl2, hl2_lines, hl2_sz = _fit_lines(
+                draw,
+                card.headline,
+                _FONT_HEADLINE,
+                max(28, int(H * 0.028)),
+                max(20, int(H * 0.020)),
+                inner_w,
+                max_lines=2,
+            )
+            for line in hl2_lines:
+                draw.text((inner_x, cy), line, font=font_hl2, fill=(255, 255, 255, 255))
+                cy += int(hl2_sz * 1.1)
+
+            cy += 4
+
+            # Context
+            font_ctx2, ctx2_lines, ctx2_sz = _fit_lines(
+                draw,
+                card.context,
+                _FONT_BODY,
+                max(20, int(H * 0.020)),
+                max(15, int(H * 0.015)),
+                inner_w,
+                max_lines=2,
+            )
+            for line in ctx2_lines:
+                draw.text((inner_x, cy), line, font=font_ctx2, fill=(165, 170, 185, 210))
+                cy += int(ctx2_sz * 1.3)
+
+            # Source — pinned near bottom of cell
+            font_src2 = _load_font(_FONT_TAGLINE, max(17, int(H * 0.017)))
+            src_bbox = draw.textbbox((0, 0), card.source, font=font_src2)
+            draw.text(
+                (inner_x, y1 - 16 - src_bbox[3]),
+                card.source,
+                font=font_src2,
+                fill=(110, 115, 130, 190),
+            )
+
+        out_buf = io.BytesIO()
+        comp.convert("RGB").save(out_buf, format="PNG")
+        return add_brand_overlay(
+            out_buf.getvalue(),
+            self._cfg.brand_name,
+            crop_bars=False,
+            corner="bottom_right",
+            logo_scale=1.2,
+        )
+
+    def _upload_image(self, image_bytes: bytes, topic: str) -> str | None:
+        slug = topic[:40].lower().replace(" ", "_").replace("/", "_")
+        ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
+        storage_path = f"thumbnails/infographic_{slug}_{ts}.png"
+
+        if self._storage is not None:
+            try:
+                return self._storage.upload(storage_path, image_bytes, content_type="image/png")
+            except Exception:
+                logger.exception("InfographicAgent: image upload failed")
+
+        local_dir = os.path.join(tempfile.gettempdir(), "btl_infographics")
+        os.makedirs(local_dir, exist_ok=True)
+        local_path = os.path.join(local_dir, os.path.basename(storage_path))
+        with open(local_path, "wb") as fh:
+            fh.write(image_bytes)
+        logger.warning("InfographicAgent: image saved locally to %s (no Supabase)", local_path)
+        return local_path
 
     # ── Upload ─────────────────────────────────────────────────────────────────
 

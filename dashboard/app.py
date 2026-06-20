@@ -783,7 +783,12 @@ def _render_pipeline_controls(scope: str) -> None:
     )
     _infog_format = st.selectbox(
         "Format",
-        ["Instagram + Facebook Reels", "Instagram Reel only", "Facebook Reel only"],
+        [
+            "Instagram + Facebook Reels",
+            "Instagram Reel only",
+            "Facebook Reel only",
+            "Static Post (Instagram)",
+        ],
         key=f"{scope}_infog_fmt",
         label_visibility="collapsed",
     )
@@ -791,6 +796,7 @@ def _render_pipeline_controls(scope: str) -> None:
         "Instagram + Facebook Reels": "create_infographic",
         "Instagram Reel only": "create_infographic_ig",
         "Facebook Reel only": "create_infographic_fb",
+        "Static Post (Instagram)": "create_infographic_static",
     }
     if st.button(
         "📊  Generate Infographic",
@@ -968,7 +974,7 @@ def _post_card(
 ) -> None:
     is_carousel = post.get("post_type") == "carousel"
     is_reel = post.get("post_type") in ("reel", "infographic_reel")
-    is_infographic = post.get("post_type") == "infographic_reel"
+    is_infographic = post.get("post_type") in ("infographic_reel", "infographic_static")
     slides = post.get("slides") or []
     video_url = post.get("video_url", "")
     platform = post.get("platform", "")
@@ -1272,12 +1278,17 @@ with tab_scheduled:
         elif _type_filter == "Reel":
             sched_sorted = [p for p in sched_sorted if p.get("post_type") == "reel"]
         elif _type_filter == "Infographic":
-            sched_sorted = [p for p in sched_sorted if p.get("post_type") == "infographic_reel"]
+            sched_sorted = [
+                p
+                for p in sched_sorted
+                if p.get("post_type") in ("infographic_reel", "infographic_static")
+            ]
         elif _type_filter == "Standard":
             sched_sorted = [
                 p
                 for p in sched_sorted
-                if p.get("post_type") not in ("carousel", "reel", "infographic_reel")
+                if p.get("post_type")
+                not in ("carousel", "reel", "infographic_reel", "infographic_static")
             ]
 
         if not sched_sorted:

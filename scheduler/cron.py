@@ -1291,8 +1291,10 @@ def run_infographic_pipeline(command: str = "create_infographic") -> str:
     platform_map = {
         "create_infographic_ig": [Platform.INSTAGRAM.value],
         "create_infographic_fb": [Platform.FACEBOOK.value],
+        "create_infographic_static": [Platform.INSTAGRAM.value],
     }
     platforms = platform_map.get(command, None)  # None → agent picks defaults
+    fmt = "static" if command == "create_infographic_static" else "reel"
 
     try:
         agent = InfographicAgent()
@@ -1303,7 +1305,7 @@ def run_infographic_pipeline(command: str = "create_infographic") -> str:
         return f"infographic pipeline failed to initialise: {type(exc).__name__}: {exc}"[:300]
 
     try:
-        posts = agent.create_posts(platforms=platforms)
+        posts = agent.create_posts(platforms=platforms, fmt=fmt)
     except Exception as exc:
         logger.exception("Infographic pipeline: create_posts failed")
         return f"infographic creation failed: {type(exc).__name__}: {exc}"[:300]
