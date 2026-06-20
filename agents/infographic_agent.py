@@ -257,7 +257,7 @@ class InfographicAgent:
                 p for p in [Platform.INSTAGRAM.value, Platform.FACEBOOK.value] if p in configured
             ] or [Platform.INSTAGRAM.value]
 
-        bg_bytes = self._generate_background(topic)
+        bg_bytes, bg_source = self._generate_background(topic)
         frames = self._compose_all_frames(bg_bytes, plan)
         logger.info("InfographicAgent: composed %d reel frames", len(frames))
 
@@ -277,6 +277,7 @@ class InfographicAgent:
                 video_url=video_url,
                 post_type="infographic_reel",
                 status=PostStatus.CONTENT_READY.value,
+                meta={"bg_source": bg_source},
             )
             posts.append(post)
             logger.info("InfographicAgent: created %s infographic_reel post %s", plat, post.id)
@@ -288,7 +289,7 @@ class InfographicAgent:
         if platforms is None:
             platforms = [Platform.INSTAGRAM.value]
 
-        bg_bytes = self._generate_background(topic, aspect_ratio="1:1")
+        bg_bytes, bg_source = self._generate_background(topic, aspect_ratio="1:1")
         image_bytes = self._compose_static_image(bg_bytes, plan)
         logger.info("InfographicAgent: composed static image (%d bytes)", len(image_bytes))
 
@@ -308,6 +309,7 @@ class InfographicAgent:
                 thumbnail_url=image_url,
                 post_type="infographic_static",
                 status=PostStatus.CONTENT_READY.value,
+                meta={"bg_source": bg_source},
             )
             posts.append(post)
             logger.info("InfographicAgent: created %s infographic_static post %s", plat, post.id)
@@ -418,18 +420,20 @@ class InfographicAgent:
         ar_slug = aspect_ratio.replace(":", "x")
         return f"bg_cache/{pillar}_{ar_slug}.png"
 
-    def _generate_background(self, topic: str, aspect_ratio: str = "9:16") -> bytes:
-        """Return a background image, using a Supabase-cached copy when available."""
+    def _generate_background(self, topic: str, aspect_ratio: str = "9:16") -> tuple[bytes, str]:
+        """Return (image_bytes, source) where source is 'cache', 'imagen_3', or 'higgsfield'."""
         cache_key = self._bg_cache_key(topic, aspect_ratio)
         if self._storage is not None:
             cached = self._storage.download(cache_key)
             if cached:
                 logger.info("InfographicAgent: background cache hit %s", cache_key)
-                return cached
+                return cached, "cache"
 
+        source = "imagen_3"
         if self._cfg.higgsfield_api_key:
             try:
                 bg_bytes = self._higgsfield_background(topic, aspect_ratio)
+                source = "higgsfield"
             except Exception:
                 logger.warning("InfographicAgent: Higgsfield failed; trying Imagen", exc_info=True)
                 bg_bytes = self._imagen_background(topic, aspect_ratio)
@@ -443,7 +447,7 @@ class InfographicAgent:
             except Exception:
                 logger.warning("InfographicAgent: failed to cache background", exc_info=True)
 
-        return bg_bytes
+        return bg_bytes, source
 
     def _higgsfield_background(self, topic: str, aspect_ratio: str = "9:16") -> bytes:
         prompt = _BG_DEFAULT
@@ -1189,15 +1193,16 @@ class InfographicAgent:
         if platforms is None:
             platforms = [Platform.INSTAGRAM.value]
 
+        bg_source = "none"
         if style == "wheel":
-            bg_bytes = self._generate_background(topic, aspect_ratio="1:1")
+            bg_bytes, bg_source = self._generate_background(topic, aspect_ratio="1:1")
             image_bytes = self._compose_wheel_image(bg_bytes, plan)
             post_type = "infographic_wheel"
         elif style == "dark":
-            bg_bytes = self._generate_background(topic, aspect_ratio="1:1")
+            bg_bytes, bg_source = self._generate_background(topic, aspect_ratio="1:1")
             image_bytes = self._compose_dark_panels_image(bg_bytes, plan)
             post_type = "infographic_dark"
-        else:  # light
+        else:  # light — white PIL canvas, no image API
             image_bytes = self._compose_light_magazine_image(plan)
             post_type = "infographic_light"
 
@@ -1219,6 +1224,7 @@ class InfographicAgent:
                 thumbnail_url=image_url,
                 post_type=post_type,
                 status=PostStatus.CONTENT_READY.value,
+                meta={"bg_source": bg_source},
             )
             posts.append(post)
             logger.info("InfographicAgent: created %s %s post %s", plat, post_type, post.id)

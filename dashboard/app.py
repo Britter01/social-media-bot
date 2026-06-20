@@ -976,9 +976,10 @@ def _compact_num(n: int | None) -> str:
 
 
 def _model_badges(post: dict) -> str:
-    """Return HTML model-attribution badges inferred from post type and env config."""
+    """Return HTML model-attribution badges inferred from post type and meta."""
     post_type = post.get("post_type") or "standard"
     has_media = bool(post.get("thumbnail_url") or post.get("video_url"))
+    bg_source = (post.get("meta") or {}).get("bg_source")
 
     image_model = "Higgsfield" if os.environ.get("HIGGSFIELD_API_KEY") else "Imagen 3"
 
@@ -990,9 +991,17 @@ def _model_badges(post: dict) -> str:
 
     parts = [_badge("Claude", "#EDE9FE", "#5B21B6")]
 
-    # Light magazine uses a white background drawn in Pillow — no image-gen API call.
     if has_media and post_type != "infographic_light":
-        parts.append(_badge(image_model, "#DBEAFE", "#1D4ED8"))
+        if bg_source == "cache":
+            parts.append(_badge("BG Cached", "#D1FAE5", "#065F46"))
+        elif bg_source == "higgsfield":
+            parts.append(_badge("Higgsfield", "#DBEAFE", "#1D4ED8"))
+        elif bg_source == "none":
+            pass  # light magazine or other PIL-only styles
+        else:
+            # older posts without meta, or freshly generated
+            label = "Imagen 3" if bg_source in (None, "imagen_3") else image_model
+            parts.append(_badge(label, "#DBEAFE", "#1D4ED8"))
 
     if post_type in ("reel", "infographic_reel"):
         parts.append(_badge("Freesound", "#D1FAE5", "#065F46"))

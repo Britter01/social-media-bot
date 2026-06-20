@@ -100,6 +100,8 @@ class Post:
     post_type: str = "standard"  # "standard" or "carousel"
     # carousel slides: [{headline, body, image_url, role}]
     slides: list[dict] = field(default_factory=list)
+    # arbitrary key-value metadata (e.g. bg_source: "cache"|"imagen_3"|"higgsfield")
+    meta: dict = field(default_factory=dict)
 
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
@@ -150,6 +152,7 @@ class Post:
             "error": self.error,
             "post_type": self.post_type,
             "slides": self.slides,
+            "meta": self.meta,
             "created_at": _iso(self.created_at),
             "updated_at": _iso(self.updated_at),
         }
@@ -174,6 +177,7 @@ class Post:
             error=row.get("error"),
             post_type=row.get("post_type", "standard"),
             slides=list(row.get("slides") or []),
+            meta=dict(row.get("meta") or {}),
             created_at=_parse(row.get("created_at")) or datetime.now(UTC),
             updated_at=_parse(row.get("updated_at")) or datetime.now(UTC),
         )
