@@ -975,6 +975,31 @@ def _compact_num(n: int | None) -> str:
     return str(n)
 
 
+def _model_badges(post: dict) -> str:
+    """Return HTML model-attribution badges inferred from post type and env config."""
+    post_type = post.get("post_type") or "standard"
+    has_media = bool(post.get("thumbnail_url") or post.get("video_url"))
+
+    image_model = "Higgsfield" if os.environ.get("HIGGSFIELD_API_KEY") else "Imagen 3"
+
+    def _badge(label: str, bg: str, fg: str) -> str:
+        return (
+            f"<span style='background:{bg};color:{fg};font-size:10px;font-weight:600;"
+            f"padding:2px 6px;border-radius:4px;white-space:nowrap'>{label}</span>"
+        )
+
+    parts = [_badge("Claude", "#EDE9FE", "#5B21B6")]
+
+    # Light magazine uses a white background drawn in Pillow — no image-gen API call.
+    if has_media and post_type != "infographic_light":
+        parts.append(_badge(image_model, "#DBEAFE", "#1D4ED8"))
+
+    if post_type in ("reel", "infographic_reel"):
+        parts.append(_badge("Freesound", "#D1FAE5", "#065F46"))
+
+    return " ".join(parts)
+
+
 def _post_card(
     post: dict, time_str: str = "", time_label: str = "", analytics: dict | None = None
 ) -> None:
@@ -1036,9 +1061,11 @@ def _post_card(
             f"{icon} {html.escape(time_str)}</span>"
         )
 
+    model_html = _model_badges(post)
     st.markdown(
         f"""<div style='padding:8px 2px 4px'>
-          <div style='margin-bottom:6px'>{pills}</div>
+          <div style='margin-bottom:4px'>{pills}</div>
+          <div style='margin-bottom:6px;display:flex;gap:4px;flex-wrap:wrap'>{model_html}</div>
           <div style='font-family:"Figtree",sans-serif;font-size:17px;font-weight:700;
                       letter-spacing:-0.01em;color:{CHARCOAL};line-height:1.25;margin-bottom:3px'>
             {e_title}</div>
