@@ -627,8 +627,6 @@ class InfographicAgent:
             json={
                 "prompt": prompt,
                 "aspect_ratio": aspect_ratio,
-                "quality": "HD",
-                "batch_size": "SINGLE",
             },
             timeout=30,
         )
@@ -1982,8 +1980,6 @@ class InfographicAgent:
             json={
                 "prompt": prompt,
                 "aspect_ratio": "1:1",
-                "quality": "HD",
-                "batch_size": "SINGLE",
             },
             timeout=30,
         )
