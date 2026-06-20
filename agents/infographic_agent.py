@@ -270,7 +270,12 @@ class _TipsPlan(BaseModel):
 
 class _RichStat(BaseModel):
     value: str = Field(description="Key metric — e.g. '73%' or '$4.4T'. Max 8 chars.")
-    label: str = Field(description="What the stat means — max 8 words.")
+    label: str = Field(
+        description=(
+            "What the stat means — exactly 5-7 words, always a complete, self-contained phrase. "
+            "Never end mid-sentence. No ellipsis. E.g. 'average time saved per week' not 'average time saved per wee'."  # noqa: E501
+        )
+    )
     source: str = Field(default="", description="Attribution — max 5 words.")
 
 
@@ -315,7 +320,10 @@ class _RichSlidePlan(BaseModel):
     )
     quote: str = Field(
         default="",
-        description="Compelling insight or pull-quote — max 18 words. Blank if nothing strong.",
+        description=(
+            "Compelling insight or pull-quote — max 15 words, must be a complete sentence. "
+            "Blank if nothing strong. Never cut mid-thought."
+        ),
     )
     quote_attribution: str = Field(
         default="",
@@ -1979,8 +1987,16 @@ class InfographicAgent:
                 "a brand that makes technology feel exciting and accessible. "
                 "Given research, create a rich one-page infographic slide plan. "
                 "Choose the layout that best fits the content ('magazine', 'dashboard', or 'editorial'). "  # noqa: E501
-                "Write dramatic, topic-specific Higgsfield image prompts. "
-                "Pack every section with current, specific, non-generic data. No emojis anywhere."
+                "Write dramatic, topic-specific image prompts. "
+                "Pack every section with current, specific, non-generic data. No emojis anywhere.\n\n"  # noqa: E501
+                "CRITICAL TEXT QUALITY RULES — violating any of these ruins the visual:\n"
+                "• stat labels: exactly 5-7 words, always a grammatically complete phrase — "
+                "e.g. 'average weekly hours saved by AI' not 'average hours saved per week by AI tools used'. "  # noqa: E501
+                "Never exceed 7 words.\n"
+                "• bullets: each bullet is one punchy, complete sentence — max 10 words, never cut mid-thought.\n"  # noqa: E501
+                "• quote: a single memorable sentence — max 15 words, complete and self-contained.\n"  # noqa: E501
+                "• topic_title: max 4 words — bold, punchy, no filler.\n"
+                "• hook: one complete sentence — max 10 words, no filler."
             ),
             tools=[plan_tool],
             tool_choice={"type": "tool", "name": "create_rich_slide_plan"},
@@ -2254,7 +2270,6 @@ class InfographicAgent:
             n_cols = min(2, len(stats))
             sw = (LEFT_W - (COL_GAP if n_cols == 2 else 0)) // n_cols
             font_sv = _load_font(_FONT_HEADLINE, max(48, int(H * 0.048)))
-            font_sl = _load_font(_FONT_BODY, max(16, int(H * 0.016)))
             font_ss = _load_font(_FONT_TAGLINE, max(13, int(H * 0.013)))
             for si in range(n_cols):
                 sc = accents[si]
@@ -2275,12 +2290,17 @@ class InfographicAgent:
                     font=font_sv,
                     fill=(*sc, 255) if theme == "dark" else (*sc, 230),
                 )
-                draw.text(
-                    (ix, sy0 + 68), _strip_emojis(stats[si].label)[:34], font=font_sl, fill=TXT_MAIN
+                lbl_font, lbl_lines, lbl_sz = _fit_lines(
+                    draw, _strip_emojis(stats[si].label), _FONT_BODY,
+                    max(16, int(H * 0.016)), max(11, int(H * 0.011)), sw - 16, max_lines=2
                 )
+                lbl_y = sy0 + 68
+                for lbl_ln in lbl_lines:
+                    draw.text((ix, lbl_y), lbl_ln, font=lbl_font, fill=TXT_MAIN)
+                    lbl_y += int(lbl_sz * 1.25)
                 if stats[si].source:
                     draw.text(
-                        (ix, sy0 + 92), _strip_emojis(stats[si].source), font=font_ss, fill=TXT_BODY
+                        (ix, lbl_y + 2), _strip_emojis(stats[si].source), font=font_ss, fill=TXT_BODY  # noqa: E501
                     )
             cy += 176
 
@@ -2352,7 +2372,6 @@ class InfographicAgent:
             sc3 = accents[2]
             s3_y = CONTENT_TOP + SPOT_D + 48
             font_s3v = _load_font(_FONT_HEADLINE, max(40, int(H * 0.040)))
-            font_s3l = _load_font(_FONT_BODY, max(14, int(H * 0.014)))
             draw.text(
                 (RX_CTR, s3_y),
                 _strip_emojis(stats[2].value),
@@ -2360,13 +2379,14 @@ class InfographicAgent:
                 fill=(*sc3, 255) if theme == "dark" else (*sc3, 230),
                 anchor="mm",
             )
-            draw.text(
-                (RX_CTR, s3_y + 48),
-                _strip_emojis(stats[2].label)[:28],
-                font=font_s3l,
-                fill=TXT_BODY,
-                anchor="mm",
+            s3l_font, s3l_lines, s3l_sz = _fit_lines(
+                draw, _strip_emojis(stats[2].label), _FONT_BODY,
+                max(14, int(H * 0.014)), max(10, int(H * 0.010)), RIGHT_W - 20, max_lines=2
             )
+            s3l_y = s3_y + 48 - int(s3l_sz * 0.6 * (len(s3l_lines) - 1))
+            for s3l_ln in s3l_lines:
+                draw.text((RX_CTR, s3l_y), s3l_ln, font=s3l_font, fill=TXT_BODY, anchor="mm")
+                s3l_y += int(s3l_sz * 1.25)
 
         if len(spot_bytes_list) >= 2:
             s2y = H - 60 - SPOT_D - 20
@@ -2393,13 +2413,14 @@ class InfographicAgent:
                     fill=(*sc4, 255) if theme == "dark" else (*sc4, 230),
                     anchor="mm",
                 )
-                draw.text(
-                    (RX_CTR, s4_base - 8),
-                    _strip_emojis(s4.label)[:28],
-                    font=_load_font(_FONT_BODY, max(13, int(H * 0.013))),
-                    fill=TXT_BODY,
-                    anchor="mm",
+                s4l_font, s4l_lines, s4l_sz = _fit_lines(
+                    draw, _strip_emojis(s4.label), _FONT_BODY,
+                    max(13, int(H * 0.013)), max(10, int(H * 0.010)), RIGHT_W - 20, max_lines=2
                 )
+                s4l_y = s4_base - 8 - int(s4l_sz * 0.6 * (len(s4l_lines) - 1))
+                for s4l_ln in s4l_lines:
+                    draw.text((RX_CTR, s4l_y), s4l_ln, font=s4l_font, fill=TXT_BODY, anchor="mm")
+                    s4l_y += int(s4l_sz * 1.25)
 
         draw = ImageDraw.Draw(comp)
         draw.text(
@@ -2490,7 +2511,6 @@ class InfographicAgent:
         STAT_GAP = 10
         stat_w = (W - PAD * 2 - STAT_GAP * (n_stat_shown - 1)) // n_stat_shown
         font_sv = _load_font(_FONT_HEADLINE, max(52, int(H * 0.052)))
-        font_sl = _load_font(_FONT_BODY, max(15, int(H * 0.015)))
         font_ss = _load_font(_FONT_TAGLINE, max(13, int(H * 0.013)))
 
         for si in range(n_stat_shown):
@@ -2514,13 +2534,14 @@ class InfographicAgent:
                     fill=(*sc, 255) if theme == "dark" else (*sc, 230),
                     anchor="mm",
                 )
-                draw.text(
-                    (cx_s, sy0 + 118),
-                    _strip_emojis(stats[si].label)[:26],
-                    font=font_sl,
-                    fill=TXT_MAIN,
-                    anchor="mm",
+                dbl_font, dbl_lines, dbl_sz = _fit_lines(
+                    draw, _strip_emojis(stats[si].label), _FONT_BODY,
+                    max(15, int(H * 0.015)), max(10, int(H * 0.010)), stat_w - 20, max_lines=2
                 )
+                dbl_y = sy0 + 118 - int(dbl_sz * 0.6 * (len(dbl_lines) - 1))
+                for dbl_ln in dbl_lines:
+                    draw.text((cx_s, dbl_y), dbl_ln, font=dbl_font, fill=TXT_MAIN, anchor="mm")
+                    dbl_y += int(dbl_sz * 1.25)
                 if stats[si].source:
                     draw.text(
                         (cx_s, sy0 + 143),
@@ -2799,7 +2820,6 @@ class InfographicAgent:
         STAT_GAP = 10
         stat_w = (W - PAD * 2 - STAT_GAP * (n_stat_shown - 1)) // n_stat_shown
         font_sv = _load_font(_FONT_HEADLINE, max(46, int(H * 0.046)))
-        font_sl = _load_font(_FONT_BODY, max(14, int(H * 0.014)))
 
         for si in range(n_stat_shown):
             sc = accents[si]
@@ -2822,13 +2842,14 @@ class InfographicAgent:
                     fill=(*sc, 255) if theme == "dark" else (*sc, 230),
                     anchor="mm",
                 )
-                draw.text(
-                    (cx_s, sy0 + 106),
-                    _strip_emojis(stats[si].label)[:28],
-                    font=font_sl,
-                    fill=TXT_MAIN,
-                    anchor="mm",
+                ebl_font, ebl_lines, ebl_sz = _fit_lines(
+                    draw, _strip_emojis(stats[si].label), _FONT_BODY,
+                    max(14, int(H * 0.014)), max(10, int(H * 0.010)), stat_w - 20, max_lines=2
                 )
+                ebl_y = sy0 + 106 - int(ebl_sz * 0.6 * (len(ebl_lines) - 1))
+                for ebl_ln in ebl_lines:
+                    draw.text((cx_s, ebl_y), ebl_ln, font=ebl_font, fill=TXT_MAIN, anchor="mm")
+                    ebl_y += int(ebl_sz * 1.25)
 
         # ── Bottom: bullets left (53%) + spot2 right (47%) ──────────────────────
         BOT_TOP = STATS_TOP + STATS_H + 8
