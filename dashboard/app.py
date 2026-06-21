@@ -901,6 +901,40 @@ def _render_pipeline_controls(scope: str) -> None:
         elif _im:
             st.caption(f"📊 Failed: {_im}")
 
+    st.markdown("---")
+    st.markdown(
+        "<div style='font-size:12px;font-weight:600;letter-spacing:0.1em;"
+        "text-transform:uppercase;color:#888;margin-bottom:6px'>AI News Carousel</div>",
+        unsafe_allow_html=True,
+    )
+    if st.button(
+        "📰  Generate AI News Now",
+        use_container_width=True,
+        help=(
+            "Fetch today's top 3 AI news stories via web search and publish a "
+            "5-slide branded carousel to Instagram + Facebook. Auto-runs daily at noon."
+        ),
+        key=f"{scope}_ai_news_btn",
+    ):
+        try:
+            _queue_command("create_ai_news", cooldown_key="create_ai_news")
+            st.info("AI News carousel queued — appears in Scheduled within ~3 min.")
+        except RuntimeError:
+            pass
+        except Exception:
+            st.error("Failed to queue AI news carousel.")
+
+    _news_last = load_last_command_status(db, "create_ai_news")
+    if _news_last:
+        _ns = _news_last.get("status", "")
+        _nm = _news_last.get("error") or ""
+        if _ns in ("pending", "running"):
+            st.caption("📰 AI news carousel generating…")
+        elif _ns == "done" and _nm:
+            st.caption(f"📰 {_nm}")
+        elif _nm:
+            st.caption(f"📰 Failed: {_nm}")
+
     if st.button("↺  Refresh data now", use_container_width=True, key=f"{scope}_refresh"):
         st.cache_data.clear()
         st.rerun()

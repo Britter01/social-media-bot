@@ -1267,6 +1267,8 @@ def run_pending_commands() -> None:
                 result_msg = run_infographic_pipeline(
                     _parts[0], topic=_parts[1] if len(_parts) > 1 else None
                 )
+            elif command == "create_ai_news":
+                result_msg = run_daily_ai_news()
             elif command.startswith("schedule_post|"):
                 result_msg = run_schedule_post(command.split("|", 1)[1])
             else:
@@ -1471,6 +1473,58 @@ def run_token_refresh() -> str:
     return msg
 
 
+def run_daily_ai_news() -> str:
+    """Fetch today's top AI news and publish a carousel to IG + FB at noon.
+
+    Generates a 5-slide news carousel (cover + 3 AI stories + CTA) using
+    live web search, then schedules it for immediate publication so it goes
+    out shortly after the noon cron fires.
+    """
+    from agents.news_agent import NewsAgent
+    from agents.scheduler_agent import SchedulerAgent
+
+    logger.info("=== Daily AI news carousel starting ===")
+    try:
+        agent = NewsAgent()
+        scheduler_agent = SchedulerAgent()
+        db = get_database()
+    except Exception as exc:
+        logger.exception("Daily AI news: failed to initialise")
+        return f"daily AI news failed to initialise: {type(exc).__name__}: {exc}"[:300]
+
+    try:
+        posts = agent.create_news_carousel()
+    except Exception as exc:
+        logger.exception("Daily AI news: create_news_carousel failed")
+        return f"daily AI news creation failed: {type(exc).__name__}: {exc}"[:300]
+
+    if not posts:
+        return "daily AI news: no posts created"
+
+    last_slot: dict[str, datetime] = db.latest_scheduled_time_by_platform()
+    created = 0
+    for post in posts:
+        try:
+            scheduler_agent.schedule(post, after=last_slot.get(post.platform))
+            last_slot[post.platform] = post.scheduled_time
+            db.insert(post)
+            logger.info(
+                "Daily AI news: scheduled %s post %s for %s",
+                post.platform,
+                post.id,
+                post.scheduled_time,
+            )
+            created += 1
+        except Exception:
+            logger.exception("Daily AI news: failed to persist post %s", post.id)
+
+    ts = last_slot.get(posts[0].platform)
+    ts_str = ts.strftime("%H:%M UTC") if ts else "unknown"
+    result = f"daily AI news: {created} post(s) scheduled around {ts_str}"
+    logger.info("=== Daily AI news finished: %s ===", result)
+    return result
+
+
 def run_weekly_strategy() -> None:
     """Monday competitor-research pass: queue 7 shaped topic ideas for approval.
 
@@ -1638,6 +1692,17 @@ def build_scheduler():
         run_infographic_pipeline,
         trigger=CronTrigger(hour=11, minute=0, timezone=config.timezone),
         id="infographic_pipeline",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
+
+    # Daily AI news carousel — fetches today's top 3 AI stories via web search
+    # and publishes a branded 5-slide carousel to Instagram + Facebook at noon.
+    scheduler.add_job(
+        run_daily_ai_news,
+        trigger=CronTrigger(hour=12, minute=0, timezone=config.timezone),
+        id="daily_ai_news",
         max_instances=1,
         coalesce=True,
         misfire_grace_time=3600,
