@@ -1332,12 +1332,12 @@ def _normalize_post_hashtags(caption: str, field_tags: list) -> tuple[str, list[
 
 
 def run_cleanup_hashtags() -> str:
-    """Normalise scheduled posts so each has clean prose + at most 5 hashtags.
+    """Normalise scheduled and generated posts so each has clean prose + at most 5 hashtags.
 
-    Triggered from the dashboard. Pulls every scheduled post, extracts any
-    hashtags written inline in the caption, merges them with the hashtags
-    field, de-duplicates, caps at 5, and writes the row back only if anything
-    changed. Returns a short summary for the dashboard.
+    Triggered from the dashboard. Pulls every scheduled and manual_ready post,
+    extracts any hashtags written inline in the caption, merges them with the
+    hashtags field, de-duplicates, caps at 5, and writes the row back only if
+    anything changed. Returns a short summary for the dashboard.
     """
     from supabase import create_client
 
@@ -1352,7 +1352,7 @@ def run_cleanup_hashtags() -> str:
         rows = (
             sb.table("posts")
             .select("id, caption, hashtags")
-            .eq("status", "scheduled")
+            .in_("status", ["scheduled", "manual_ready"])
             .execute()
             .data
             or []
@@ -1383,7 +1383,7 @@ def run_cleanup_hashtags() -> str:
         except Exception:
             logger.exception("Hashtag cleanup: failed on post %s", row.get("id", "?")[:8])
 
-    result = f"hashtag cleanup: {fixed} of {scanned} scheduled post(s) updated"
+    result = f"hashtag cleanup: {fixed} of {scanned} post(s) updated (scheduled + generated)"
     logger.info("=== %s ===", result)
     return result
 
