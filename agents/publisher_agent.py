@@ -90,6 +90,11 @@ class PublisherAgent:
         tags = " ".join(h if h.startswith("#") else f"#{h}" for h in post.hashtags[:5])
         return f"{post.caption}\n\n{tags}".strip()
 
+    @staticmethod
+    def _strip_emoji(text: str) -> str:
+        """Remove emoji and non-Latin-1 characters that violate the no-emoji posting rule."""
+        return re.sub(r"[^\x00-\xFF]", "", text).strip()
+
     def publish(self, post: Post) -> Post:
         """Publish ``post`` to its platform; set status and platform id.
 
@@ -105,6 +110,11 @@ class PublisherAgent:
                 post.platform_post_id,
             )
             return post
+
+        # Strip emoji from caption and hashtags before any platform logic runs.
+        # This applies to every path — _ig_fb_caption, caption_with_hashtags, etc.
+        post.caption = self._strip_emoji(post.caption)
+        post.hashtags = [self._strip_emoji(h) for h in post.hashtags]
 
         post.mark(PostStatus.PUBLISHING)
 
