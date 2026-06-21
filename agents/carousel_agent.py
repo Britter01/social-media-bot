@@ -77,6 +77,13 @@ class CarouselPlan(BaseModel):
     )
     cta_headline: str = Field(description="Final slide headline — prompt an action or reflection.")
     cta_body: str = Field(description="One sentence CTA. Warm, not pushy.")
+    hashtags: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Exactly 5 relevant hashtags WITHOUT the leading '#'. "
+            "Choose the strongest mix of broad and niche tags for this topic."
+        ),
+    )
 
 
 class CarouselAgent:
@@ -116,7 +123,7 @@ class CarouselAgent:
             platform=source.platform,
             topic=source.topic,
             caption=self._build_caption(plan),
-            hashtags=list(source.hashtags),
+            hashtags=[h.lstrip("#").strip() for h in plan.hashtags[:5]] or list(source.hashtags),
             title=plan.cover_headline,
             post_type="carousel",
             slides=slides_data,
@@ -176,7 +183,9 @@ class CarouselAgent:
             '"slides": [{"headline": "max 8 words", "body": "1-2 sentences"}, '
             '{"headline": "max 8 words", "body": "1-2 sentences"}], '
             '"cta_headline": "action or reflection prompt", '
-            '"cta_body": "one warm sentence"}'
+            '"cta_body": "one warm sentence", '
+            '"hashtags": ["tag1", "tag2", "tag3", "tag4", "tag5"]}'
+            "\nProvide exactly 5 hashtags WITHOUT the # prefix — strongest mix of broad and niche."
         )
         response = self._client.messages.create(
             model=self._cfg.model_creative,
@@ -196,6 +205,9 @@ class CarouselAgent:
             raise RuntimeError(
                 f"Claude returned invalid JSON: {exc}\nRaw response: {text[:300]}"
             ) from exc
+        # Ensure hashtags key exists in case an older model response omits it
+        if "hashtags" not in data:
+            data["hashtags"] = []
         plan = CarouselPlan.model_validate(data)
         # Enforce exactly 2 value slides so we always produce a 4-slide carousel.
         if len(plan.slides) > 2:

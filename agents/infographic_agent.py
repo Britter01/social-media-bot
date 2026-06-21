@@ -299,9 +299,10 @@ class _RichSlidePlan(BaseModel):
     )
     spot_prompts: list[str] = Field(
         description=(
-            "Exactly 2 Higgsfield text2image prompts for small circular spot illustrations. "
-            "Each: vivid, topic-relevant conceptual image, cinematic quality. "
-            "End each with 'no text, no letters'. Make them visually distinct from each other."
+            "REQUIRED — exactly 2 image generation prompts for small circular spot illustrations. "
+            "Each must be vivid, topic-relevant, cinematic quality. "
+            "End each with 'no text, no letters'. Make them visually distinct from each other. "
+            "You MUST always provide exactly 2 prompts — never leave this empty."
         )
     )
     stats: list[_RichStat] = Field(
@@ -309,20 +310,21 @@ class _RichSlidePlan(BaseModel):
     )
     bullets_title: str = Field(
         default="",
-        description="Title for the bullet-list section — max 5 words. Leave blank if no bullets.",
+        description="Title for the bullet-list section — max 5 words.",
     )
     bullets: list[str] = Field(
         default_factory=list,
         description=(
-            "3-5 bullet-point facts or takeaways. Each max 10 words, no emojis. "
-            "Leave empty if no bullet list is needed."
+            "Exactly 3 punchy bullet-point facts from the research. "
+            "Each: one complete sentence, max 10 words, no emojis. "
+            "Always provide all 3 — never leave this empty."
         ),
     )
     quote: str = Field(
         default="",
         description=(
-            "Compelling insight or pull-quote — max 15 words, must be a complete sentence. "
-            "Blank if nothing strong. Never cut mid-thought."
+            "A compelling data-driven insight or expert quote from the research — "
+            "max 15 words, always a complete sentence. Always provide this — do not leave blank."
         ),
     )
     quote_attribution: str = Field(
@@ -1981,22 +1983,24 @@ class InfographicAgent:
         }
         plan_response = client.messages.create(
             model=self._cfg.model_creative,
-            max_tokens=2000,
+            max_tokens=3000,
             system=(
                 "You are a premium social media graphic designer for Brite Tech Lifestyle — "
                 "a brand that makes technology feel exciting and accessible. "
                 "Given research, create a rich one-page infographic slide plan. "
                 "Choose the layout that best fits the content ('magazine', 'dashboard', or 'editorial'). "  # noqa: E501
-                "Write dramatic, topic-specific image prompts. "
                 "Pack every section with current, specific, non-generic data. No emojis anywhere.\n\n"  # noqa: E501
-                "CRITICAL TEXT QUALITY RULES — violating any of these ruins the visual:\n"
-                "• stat labels: exactly 5-7 words, always a grammatically complete phrase — "
-                "e.g. 'average weekly hours saved by AI' not 'average hours saved per week by AI tools used'. "  # noqa: E501
-                "Never exceed 7 words.\n"
-                "• bullets: each bullet is one punchy, complete sentence — max 10 words, never cut mid-thought.\n"  # noqa: E501
-                "• quote: a single memorable sentence — max 15 words, complete and self-contained.\n"  # noqa: E501
-                "• topic_title: max 4 words — bold, punchy, no filler.\n"
-                "• hook: one complete sentence — max 10 words, no filler."
+                "MANDATORY — every field below MUST be fully populated. Never leave any optional "
+                "field blank or empty:\n"
+                "• spot_prompts: always exactly 2 vivid, cinematic image prompts.\n"
+                "• bullets: always exactly 3 punchy, data-backed facts from the research.\n"
+                "• quote: always a compelling insight from the research — 1 complete sentence.\n\n"
+                "TEXT QUALITY RULES (quality constraints, not reasons to omit content):\n"
+                "• stat labels: exactly 5-7 words, always a grammatically complete phrase.\n"
+                "• bullets: each is one complete sentence, max 10 words.\n"
+                "• quote: max 15 words, complete and self-contained.\n"
+                "• topic_title: max 4 words — bold, punchy.\n"
+                "• hook: max 10 words, one complete sentence."
             ),
             tools=[plan_tool],
             tool_choice={"type": "tool", "name": "create_rich_slide_plan"},
@@ -2120,8 +2124,18 @@ class InfographicAgent:
         bg_bytes, bg_source = self._generate_background(topic, aspect_ratio="1:1")
         logger.info("InfographicAgent: rich slide background source=%s", bg_source)
 
+        prompts = list((plan.spot_prompts or [])[:2])
+        if len(prompts) < 2:
+            # LLM failed to populate spot_prompts — use generic topic-based fallbacks
+            fallback = f"Abstract cinematic {topic} concept, dramatic lighting, no text, no letters"
+            while len(prompts) < 2:
+                prompts.append(fallback)
+            logger.warning(
+                "InfographicAgent: spot_prompts had %d items; used fallback prompts",
+                len(plan.spot_prompts or []),
+            )
+
         spot_bytes_list: list[bytes] = []
-        prompts = (plan.spot_prompts or [])[:2]
         for i, prompt in enumerate(prompts):
             logger.info("InfographicAgent: generating rich spot image %d/%d", i + 1, len(prompts))
             spot_bytes_list.append(self._generate_spot_image(prompt))
@@ -2146,7 +2160,7 @@ class InfographicAgent:
                 thumbnail_url=image_url,
                 post_type=post_type,
                 status=PostStatus.CONTENT_READY.value,
-                meta={"bg_source": "higgsfield", "layout": plan.layout},
+                meta={"bg_source": bg_source, "layout": plan.layout},
             )
             posts.append(post)
             logger.info("InfographicAgent: created %s %s post %s", plat, post_type, post.id)
