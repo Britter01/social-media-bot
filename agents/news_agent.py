@@ -259,7 +259,7 @@ class NewsAgent:
                     slide_number=slide["slide_number"],
                     brand_name=self._cfg.brand_name,
                     brand_tagline=self._cfg.brand_tagline,
-                    theme="dark",
+                    theme="blue",
                 )
                 url = self._upload(carousel_id, idx, image_bytes)
                 result.append(

@@ -109,6 +109,16 @@ _LIGHT_NUM = (29, 29, 31, 18)  # charcoal watermark, barely visible
 _LIGHT_ACCENT = (0, 102, 204, 210)  # #0066CC — accent blue
 _LIGHT_TAGLINE = (161, 161, 166, 255)  # #A1A1A6 — silver
 
+# ── Brite Blue card colour palette (news carousel) ────────────────────────────
+# Full-bleed Brite Blue (#0066CC) background — intentional brand exception for
+# the daily AI news carousel to make it instantly recognisable in the feed.
+_BLUE_BG = (0, 102, 204)  # #0066CC — Brite Blue
+_BLUE_HEADLINE = (255, 255, 255, 255)  # #FFFFFF — white
+_BLUE_BODY = (232, 240, 250, 230)  # #E8F0FA — accent-light tint, readable on blue
+_BLUE_NUM = (255, 255, 255, 20)  # white watermark, barely visible
+_BLUE_ACCENT = (255, 255, 255, 90)  # white decorative line
+_BLUE_TAGLINE = (255, 255, 255, 160)  # white, slightly faded
+
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
@@ -535,6 +545,15 @@ def make_dark_text_card(
         text_headline = _LIGHT_HEADLINE
         text_body = _LIGHT_BODY
         text_tagline = _LIGHT_TAGLINE
+    elif theme == "blue":
+        bg_rgb = _BLUE_BG
+        vignette_rgb = (0, 40, 100)  # darker blue — deepens top edge
+        vignette_alpha_max = 60
+        accent_fill = _BLUE_ACCENT
+        num_fill = _BLUE_NUM
+        text_headline = _BLUE_HEADLINE
+        text_body = _BLUE_BODY
+        text_tagline = _BLUE_TAGLINE
     else:
         bg_rgb = _CARD_BG
         vignette_rgb = (255, 255, 255)  # white — brightens top edge slightly
