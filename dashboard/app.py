@@ -720,37 +720,18 @@ def _queue_command(command: str, cooldown_key: str | None = None) -> None:
     st.session_state[key] = now
 
 
-# Command buttons shown in both the sidebar (desktop) and the main-body
-# controls panel (reliable on mobile, where the sidebar is hidden behind a chevron).
-_cmds = [
-    (
-        "Daily Research",
-        "research",
-        "Scans the web for trending topics and adds them to your approval queue.",
-    ),
-    (
-        "Competitor Analysis",
-        "weekly_strategy",
-        "Runs the Monday competitor-pattern study right now — no need to wait. "
-        "Queues 7 shaped content ideas for your approval.",
-    ),
-    ("Generate Posts", "content", "Creates posts from topics you have already approved."),
-    ("Refresh Images", "image_refresh", "Regenerates any missing or failed thumbnails."),
-    ("Publish Due Posts", "publish", "Sends any scheduled post whose time has passed."),
-]
-
-
 def _render_pipeline_controls(scope: str) -> None:
     """Render the pipeline command buttons. ``scope`` keeps widget keys unique
     so the same controls can appear in the sidebar and the main body."""
-    # ── Master kill-switch ───────────────────────────────────────────────────
+
+    # ── Master kill-switch — always visible ──────────────────────────────────
     _auto_paused, _auto_since = _get_automation_state(db)
     if _auto_paused:
         st.markdown(
             f"<div style='background:#FFF3CD;border:1px solid #F0AD4E;border-radius:12px;"
             f"padding:10px 14px;margin-bottom:8px;font-size:13px;font-weight:600;"
-            f"color:#7B4F00'>⚠️ AUTOMATION PAUSED{f' since {_auto_since}' if _auto_since else ''}"
-            f"</div>",
+            f"color:#7B4F00'>⚠️ AUTOMATION PAUSED"
+            f"{f' since {_auto_since}' if _auto_since else ''}</div>",
             unsafe_allow_html=True,
         )
         if st.button(
@@ -787,382 +768,401 @@ def _render_pipeline_controls(scope: str) -> None:
             except Exception:
                 st.error("Failed to queue pause.")
 
-    st.markdown(
-        f"<div style='border-top:1px solid {SMOKE};margin:8px 0 10px'></div>",
-        unsafe_allow_html=True,
-    )
-    # ── Regular pipeline controls ────────────────────────────────────────────
-    for label, cmd, tip in _cmds:
-        if st.button(label, use_container_width=True, help=tip, key=f"{scope}_{cmd}"):
+    # ── Create Content — expanded by default (primary daily use) ─────────────
+    with st.expander("📊  Create Content", expanded=True):
+        st.markdown(
+            "<div style='font-size:10px;font-weight:600;letter-spacing:0.14em;"
+            "text-transform:uppercase;color:#888;margin-bottom:4px'>Infographic / Reel</div>",
+            unsafe_allow_html=True,
+        )
+        _infog_format = st.selectbox(
+            "Format",
+            [
+                "Instagram + Facebook Reels",
+                "Instagram Reel only",
+                "Facebook Reel only",
+                "Static Grid (Instagram)",
+                "Wheel Style (Instagram)",
+                "Dark Panels (Instagram)",
+                "Light Magazine (Instagram)",
+                "Rich Slide — Dark (IG+FB)",
+                "Rich Slide — Light (IG+FB)",
+            ],
+            key=f"{scope}_infog_fmt",
+            label_visibility="collapsed",
+        )
+        _infog_cmd_map = {
+            "Instagram + Facebook Reels": "create_infographic",
+            "Instagram Reel only": "create_infographic_ig",
+            "Facebook Reel only": "create_infographic_fb",
+            "Static Grid (Instagram)": "create_infographic_static",
+            "Wheel Style (Instagram)": "create_infographic_wheel",
+            "Dark Panels (Instagram)": "create_infographic_dark",
+            "Light Magazine (Instagram)": "create_infographic_light",
+            "Rich Slide — Dark (IG+FB)": "create_infographic_rich_dark",
+            "Rich Slide — Light (IG+FB)": "create_infographic_rich_light",
+        }
+        _INFOG_TOPIC_MAP: dict[str, str | None] = {
+            "Auto (daily rotation)": None,
+            "AI Productivity Tools & ROI": "AI productivity tools adoption and ROI statistics 2026",
+            "ChatGPT & Generative AI Business Use": (
+                "ChatGPT and generative AI business usage statistics 2026"
+            ),
+            "AI Impact on Jobs & Salaries": (
+                "AI impact on jobs: automation, new roles and salary statistics 2026"
+            ),
+            "AI Coding Assistants": "AI coding assistants: developer productivity statistics 2026",
+            "AI Content Creation": "AI content creation: usage and engagement statistics 2026",
+            "Smart Home & AI Assistants": (
+                "Smart home devices and AI assistant growth statistics 2026"
+            ),
+            "Wearable Tech & Fitness AI": "Wearable tech and AI fitness tracking statistics 2026",
+            "Remote Work Tech": "Remote work tech and AI collaboration tools statistics 2026",
+            "AI in Healthcare": (
+                "AI in healthcare: diagnosis accuracy and patient outcome statistics 2026"
+            ),
+            "AI in Education": (
+                "AI in education: student learning outcomes and adoption statistics 2026"
+            ),
+            "AI in Finance": "AI in finance: fraud detection and trading statistics 2026",
+            "AI in Cybersecurity": (
+                "AI cybersecurity: threat detection and breach prevention statistics 2026"
+            ),
+            "AI Customer Service & Chatbots": (
+                "AI customer service: chatbot adoption and satisfaction statistics 2026"
+            ),
+            "Generative AI Market & Investment": (
+                "Generative AI market size and investment growth 2026"
+            ),
+            "Self-Driving & Autonomous Vehicles": (
+                "Self-driving and autonomous vehicle technology statistics 2026"
+            ),
+            "✏️  Custom topic…": "CUSTOM",
+        }
+        _infog_topic_label = st.selectbox(
+            "Topic",
+            list(_INFOG_TOPIC_MAP.keys()),
+            key=f"{scope}_infog_topic",
+            label_visibility="collapsed",
+        )
+        _infog_topic_val = _INFOG_TOPIC_MAP[_infog_topic_label]
+        if _infog_topic_val == "CUSTOM":
+            _infog_topic_val = (
+                st.text_input(
+                    "Custom topic",
+                    placeholder="e.g. AI in retail industry statistics 2026",
+                    key=f"{scope}_infog_custom",
+                    label_visibility="collapsed",
+                ).strip()
+                or None
+            )
+        if st.button(
+            "📊  Generate Infographic",
+            use_container_width=True,
+            type="primary",
+            help=(
+                "Research a trending AI/tech topic, compose 5 eye-catching stat cards using "
+                "Higgsfield visuals, and assemble them into a 15-second Reel. "
+                "The finished post is auto-scheduled. Takes ~2 minutes."
+            ),
+            key=f"{scope}_infog_btn",
+        ):
             try:
-                _queue_command(cmd)
+                _cmd = _infog_cmd_map[_infog_format]
+                if _infog_topic_val:
+                    _cmd = f"{_cmd}|{_infog_topic_val}"
+                _queue_command(_cmd, cooldown_key="create_infographic")
+                st.info("Infographic queued — the Reel appears in Scheduled within ~5 min.")
+            except RuntimeError:
+                pass
+            except Exception:
+                st.error("Failed to queue infographic.")
+        _infog_last = load_last_command_status(db, "create_infographic", prefix=True)
+        if _infog_last:
+            _is = _infog_last.get("status", "")
+            _im = _infog_last.get("error") or ""
+            if _is in ("pending", "running"):
+                st.caption("📊 Infographic generating…")
+            elif _im and "spending limit" in _im.lower():
+                st.warning(
+                    "⚠️ Anthropic API spending limit reached. "
+                    "Raise your cap at console.anthropic.com to resume."
+                )
+            elif _is == "done" and _im:
+                st.caption(f"📊 {_im}")
+            elif _im:
+                st.caption(f"📊 Failed: {_im}")
+
+        st.markdown(
+            f"<div style='border-top:1px solid {SMOKE};margin:10px 0 8px'></div>",
+            unsafe_allow_html=True,
+        )
+
+        st.markdown(
+            "<div style='font-size:10px;font-weight:600;letter-spacing:0.14em;"
+            "text-transform:uppercase;color:#888;margin-bottom:4px'>AI News Carousel</div>",
+            unsafe_allow_html=True,
+        )
+        if st.button(
+            "📰  Generate AI News Now",
+            use_container_width=True,
+            help=(
+                "Fetch today's top 3 AI news stories via web search and publish a "
+                "5-slide branded carousel to Instagram + Facebook. Auto-runs daily at noon."
+            ),
+            key=f"{scope}_ai_news_btn",
+        ):
+            try:
+                _queue_command("create_ai_news", cooldown_key="create_ai_news")
+                st.info("AI News carousel queued — appears in Generated tab within ~3 min.")
+            except RuntimeError:
+                pass
+            except Exception:
+                st.error("Failed to queue AI news carousel.")
+        _news_last = load_last_command_status(db, "create_ai_news")
+        if _news_last:
+            _ns = _news_last.get("status", "")
+            _nm = _news_last.get("error") or ""
+            if _ns in ("pending", "running"):
+                st.caption("📰 AI news carousel generating…")
+            elif _ns == "done" and _nm:
+                st.caption(f"📰 {_nm}")
+            elif _nm:
+                st.caption(f"📰 Failed: {_nm}")
+        if st.button(
+            "🖼️  Regenerate news background",
+            use_container_width=True,
+            help=(
+                "Clears the stored AI background template for the news carousel. "
+                "The next carousel run will produce a fresh Higgsfield/Imagen background."
+            ),
+            key=f"{scope}_regen_news_bg",
+        ):
+            try:
+                _queue_command("regen_news_bg", cooldown_key="regen_news_bg")
+                st.info(
+                    "Background reset queued — fresh AI background generates on the next carousel run."
+                )
+            except RuntimeError:
+                pass
+            except Exception:
+                st.error("Failed to queue background reset.")
+        _regen_last = load_last_command_status(db, "regen_news_bg")
+        if _regen_last:
+            _rs = _regen_last.get("status", "")
+            _rm = _regen_last.get("error") or ""
+            if _rs in ("pending", "running"):
+                st.caption("🖼️ Background reset running…")
+            elif _rs == "done" and _rm:
+                st.caption(f"🖼️ {_rm}")
+            elif _rm:
+                st.caption(f"🖼️ Failed: {_rm}")
+
+    # ── Run Pipeline — collapsed ──────────────────────────────────────────────
+    with st.expander("⚙️  Run Pipeline", expanded=False):
+        _pipeline_cmds = [
+            (
+                "Daily Research",
+                "research",
+                None,
+                "Scans the web for trending topics and adds them to your approval queue.",
+            ),
+            (
+                "Competitor Analysis",
+                "weekly_strategy",
+                None,
+                "Runs the competitor-pattern study right now — queues shaped content ideas "
+                "for your approval.",
+            ),
+            (
+                "Generate Posts",
+                "content",
+                None,
+                "Creates posts from topics you have already approved.",
+            ),
+            (
+                "Publish Due Posts",
+                "publish",
+                None,
+                "Sends any scheduled post whose time has passed.",
+            ),
+        ]
+        for _label, _cmd, _cooldown, _tip in _pipeline_cmds:
+            if st.button(_label, use_container_width=True, help=_tip, key=f"{scope}_{_cmd}"):
+                try:
+                    _queue_command(_cmd, cooldown_key=_cooldown)
+                except RuntimeError:
+                    pass
+                except Exception:
+                    st.error("Failed to queue command.")
+        if st.button(
+            "Research + Generate",
+            use_container_width=True,
+            help=(
+                "Runs Competitor Analysis AND generates posts from already-approved topics "
+                "in one go."
+            ),
+            key=f"{scope}_research_generate",
+        ):
+            try:
+                _queue_command("weekly_strategy", cooldown_key="rg_strategy")
+                _queue_command("content", cooldown_key="rg_content")
+            except RuntimeError:
+                pass
+            except Exception:
+                st.error("Failed to queue commands.")
+
+    # ── Instagram — collapsed ─────────────────────────────────────────────────
+    with st.expander("📱  Instagram", expanded=False):
+        _ig_api_mode, _ig_since = _get_instagram_mode(db)
+        if _ig_api_mode:
+            st.markdown(
+                "<div style='background:#E8F0FA;border:1px solid #0066CC;border-radius:12px;"
+                "padding:8px 12px;margin-bottom:8px;font-size:12px;font-weight:600;"
+                f"color:#003D7A'>📡 API mode"
+                f"{f' since {_ig_since}' if _ig_since else ''}</div>",
+                unsafe_allow_html=True,
+            )
+            if st.button(
+                "📱  Back to Telegram",
+                use_container_width=True,
+                type="primary",
+                key=f"{scope}_ig_telegram",
+                help="Route Instagram posts to Telegram again for manual native posting.",
+            ):
+                try:
+                    _queue_command("instagram_telegram_mode", cooldown_key="instagram_mode")
+                    st.success("Switching to Telegram mode — takes effect within ~2 min.")
+                except RuntimeError:
+                    pass
+                except Exception:
+                    st.error("Failed to queue mode switch.")
+        else:
+            st.markdown(
+                "<div style='background:#E8F5E9;border:1px solid #A5D6A7;border-radius:12px;"
+                "padding:8px 12px;margin-bottom:8px;font-size:12px;font-weight:600;"
+                "color:#2E7D32'>📱 Telegram mode (manual posting)</div>",
+                unsafe_allow_html=True,
+            )
+            if st.button(
+                "📡  Switch to API publishing",
+                use_container_width=True,
+                key=f"{scope}_ig_api",
+                help=(
+                    "Publish Instagram posts automatically via the Graph API. "
+                    "Use when you can't check Telegram. "
+                    "Organic reach may be lower than native posting."
+                ),
+            ):
+                try:
+                    _queue_command("instagram_api_mode", cooldown_key="instagram_mode")
+                    st.info(
+                        "Switching to API mode — Instagram posts will auto-publish within ~2 min."
+                    )
+                except RuntimeError:
+                    pass
+                except Exception:
+                    st.error("Failed to queue mode switch.")
+
+    # ── Maintenance — collapsed ───────────────────────────────────────────────
+    with st.expander("🔧  Maintenance", expanded=False):
+        if st.button(
+            "Refresh Images",
+            use_container_width=True,
+            help="Regenerates any missing or failed thumbnails.",
+            key=f"{scope}_image_refresh",
+        ):
+            try:
+                _queue_command("image_refresh")
             except RuntimeError:
                 pass
             except Exception:
                 st.error("Failed to queue command.")
 
-    st.markdown(
-        f"<div style='border-top:1px solid {SMOKE};margin:10px 0 8px'></div>",
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        "<div style='font-family:Figtree,sans-serif;font-size:10px;font-weight:600;"
-        f"letter-spacing:0.16em;text-transform:uppercase;color:{SILVER};margin-bottom:6px'>"
-        "Quick action</div>",
-        unsafe_allow_html=True,
-    )
-
-    if st.button(
-        "Research + Generate",
-        use_container_width=True,
-        help=(
-            "Runs Competitor Analysis AND generates posts from already-approved topics "
-            "in one go. New topics from the research still need your approval before "
-            "the next Generate run picks them up."
-        ),
-        key=f"{scope}_research_generate",
-    ):
-        try:
-            _queue_command("weekly_strategy", cooldown_key="rg_strategy")
-            _queue_command("content", cooldown_key="rg_content")
-        except RuntimeError:
-            pass
-        except Exception:
-            st.error("Failed to queue commands.")
-
-    if st.button(
-        "🩺  System Check",
-        use_container_width=True,
-        help=(
-            "Runs a self-test inside the worker: which API keys it can see, "
-            "whether the image agents can start, and whether Supabase Storage "
-            "is writable. Use this when posts come out with no image."
-        ),
-        key=f"{scope}_diagnostics",
-    ):
-        try:
-            _queue_command("diagnostics", cooldown_key="diagnostics")
-            st.info("System check queued — the result appears below within ~2 min.")
-        except RuntimeError:
-            pass
-        except Exception:
-            st.error("Failed to queue system check.")
-
-    _diag = load_last_command_status(db, "diagnostics")
-    if _diag:
-        _diag_status = _diag.get("status", "")
-        _diag_msg = _diag.get("error") or ""
-        if _diag_status == "done" and _diag_msg:
-            st.caption(f"🩺 Last system check: {_diag_msg}")
-        elif _diag_status in ("pending", "running"):
-            st.caption("🩺 System check running…")
-
-    if st.button(
-        "#️⃣  Trim hashtags to 5",
-        use_container_width=True,
-        help=(
-            "Scans every scheduled post, pulls any hashtags written into the caption "
-            "into the hashtags field, de-duplicates, and caps each post at 5 relevant "
-            "hashtags. Captions are left as clean prose."
-        ),
-        key=f"{scope}_cleanup_hashtags",
-    ):
-        try:
-            _queue_command("cleanup_hashtags", cooldown_key="cleanup_hashtags")
-            st.info("Hashtag cleanup queued — the result appears below within ~2 min.")
-        except RuntimeError:
-            pass
-        except Exception:
-            st.error("Failed to queue hashtag cleanup.")
-
-    _htc = load_last_command_status(db, "cleanup_hashtags")
-    if _htc:
-        _htc_status = _htc.get("status", "")
-        _htc_msg = _htc.get("error") or ""
-        if _htc_status == "done" and _htc_msg:
-            st.caption(f"#️⃣ {_htc_msg}")
-        elif _htc_status in ("pending", "running"):
-            st.caption("#️⃣ Hashtag cleanup running…")
-        elif _htc_msg:
-            st.caption(f"#️⃣ Failed: {_htc_msg}")
-        elif _diag_msg:
-            st.caption(f"🩺 Last system check failed: {_diag_msg}")
-
-    if st.button(
-        "🔑  Refresh Meta Token",
-        use_container_width=True,
-        help=(
-            "Re-exchanges the Facebook/Instagram long-lived token for a fresh "
-            "~60-day one and stores it so publishing keeps working without a "
-            "redeploy. Runs automatically every Sunday; use this to force it. "
-            "Requires FACEBOOK_APP_ID and FACEBOOK_APP_SECRET in Railway."
-        ),
-        key=f"{scope}_refresh_token",
-    ):
-        try:
-            _queue_command("refresh_token", cooldown_key="refresh_token")
-            st.info("Token refresh queued — the result appears below within ~2 min.")
-        except RuntimeError:
-            pass
-        except Exception:
-            st.error("Failed to queue token refresh.")
-
-    _tok = load_last_command_status(db, "refresh_token")
-    if _tok:
-        _tok_status = _tok.get("status", "")
-        _tok_msg = _tok.get("error") or ""
-        if _tok_status == "done" and _tok_msg:
-            st.caption(f"🔑 Last token refresh: {_tok_msg}")
-        elif _tok_status in ("pending", "running"):
-            st.caption("🔑 Token refresh running…")
-        elif _tok_msg:
-            st.caption(f"🔑 Last token refresh failed: {_tok_msg}")
-
-    st.markdown("---")
-    st.markdown(
-        "<div style='font-size:12px;font-weight:600;letter-spacing:0.1em;"
-        "text-transform:uppercase;color:#888;margin-bottom:6px'>Generate Infographic</div>",
-        unsafe_allow_html=True,
-    )
-    _infog_format = st.selectbox(
-        "Format",
-        [
-            "Instagram + Facebook Reels",
-            "Instagram Reel only",
-            "Facebook Reel only",
-            "Static Grid (Instagram)",
-            "Wheel Style (Instagram)",
-            "Dark Panels (Instagram)",
-            "Light Magazine (Instagram)",
-            "Rich Slide — Dark (IG+FB)",
-            "Rich Slide — Light (IG+FB)",
-        ],
-        key=f"{scope}_infog_fmt",
-        label_visibility="collapsed",
-    )
-    _infog_cmd_map = {
-        "Instagram + Facebook Reels": "create_infographic",
-        "Instagram Reel only": "create_infographic_ig",
-        "Facebook Reel only": "create_infographic_fb",
-        "Static Grid (Instagram)": "create_infographic_static",
-        "Wheel Style (Instagram)": "create_infographic_wheel",
-        "Dark Panels (Instagram)": "create_infographic_dark",
-        "Light Magazine (Instagram)": "create_infographic_light",
-        "Rich Slide — Dark (IG+FB)": "create_infographic_rich_dark",
-        "Rich Slide — Light (IG+FB)": "create_infographic_rich_light",
-    }
-    # Topic / category selector
-    _INFOG_TOPIC_MAP: dict[str, str | None] = {
-        "Auto (daily rotation)": None,
-        "AI Productivity Tools & ROI": ("AI productivity tools adoption and ROI statistics 2026"),
-        "ChatGPT & Generative AI Business Use": (
-            "ChatGPT and generative AI business usage statistics 2026"
-        ),
-        "AI Impact on Jobs & Salaries": (
-            "AI impact on jobs: automation, new roles and salary statistics 2026"
-        ),
-        "AI Coding Assistants": ("AI coding assistants: developer productivity statistics 2026"),
-        "AI Content Creation": ("AI content creation: usage and engagement statistics 2026"),
-        "Smart Home & AI Assistants": (
-            "Smart home devices and AI assistant growth statistics 2026"
-        ),
-        "Wearable Tech & Fitness AI": ("Wearable tech and AI fitness tracking statistics 2026"),
-        "Remote Work Tech": ("Remote work tech and AI collaboration tools statistics 2026"),
-        "AI in Healthcare": (
-            "AI in healthcare: diagnosis accuracy and patient outcome statistics 2026"
-        ),
-        "AI in Education": (
-            "AI in education: student learning outcomes and adoption statistics 2026"
-        ),
-        "AI in Finance": ("AI in finance: fraud detection and trading statistics 2026"),
-        "AI in Cybersecurity": (
-            "AI cybersecurity: threat detection and breach prevention statistics 2026"
-        ),
-        "AI Customer Service & Chatbots": (
-            "AI customer service: chatbot adoption and satisfaction statistics 2026"
-        ),
-        "Generative AI Market & Investment": (
-            "Generative AI market size and investment growth 2026"
-        ),
-        "Self-Driving & Autonomous Vehicles": (
-            "Self-driving and autonomous vehicle technology statistics 2026"
-        ),
-        "✏️  Custom topic…": "CUSTOM",
-    }
-    _infog_topic_label = st.selectbox(
-        "Topic",
-        list(_INFOG_TOPIC_MAP.keys()),
-        key=f"{scope}_infog_topic",
-        label_visibility="collapsed",
-    )
-    _infog_topic_val = _INFOG_TOPIC_MAP[_infog_topic_label]
-    if _infog_topic_val == "CUSTOM":
-        _infog_topic_val = (
-            st.text_input(
-                "Custom topic",
-                placeholder="e.g. AI in retail industry statistics 2026",
-                key=f"{scope}_infog_custom",
-                label_visibility="collapsed",
-            ).strip()
-            or None
-        )
-
-    if st.button(
-        "📊  Generate Infographic",
-        use_container_width=True,
-        help=(
-            "Research a trending AI/tech topic, compose 5 eye-catching stat cards using "
-            "Higgsfield visuals, and assemble them into a 15-second Reel. "
-            "The finished post is auto-scheduled. Takes ~2 minutes."
-        ),
-        key=f"{scope}_infog_btn",
-    ):
-        try:
-            _cmd = _infog_cmd_map[_infog_format]
-            if _infog_topic_val:
-                _cmd = f"{_cmd}|{_infog_topic_val}"
-            _queue_command(_cmd, cooldown_key="create_infographic")
-            st.info("Infographic queued — the Reel appears in Scheduled within ~5 min.")
-        except RuntimeError:
-            pass
-        except Exception:
-            st.error("Failed to queue infographic.")
-
-    _infog_last = load_last_command_status(db, "create_infographic", prefix=True)
-    if _infog_last:
-        _is = _infog_last.get("status", "")
-        _im = _infog_last.get("error") or ""
-        if _is in ("pending", "running"):
-            st.caption("📊 Infographic generating…")
-        elif _im and "spending limit" in _im.lower():
-            st.warning(
-                "⚠️ Anthropic API spending limit reached. "
-                "Raise your cap at console.anthropic.com to resume."
-            )
-        elif _is == "done" and _im:
-            st.caption(f"📊 {_im}")
-        elif _im:
-            st.caption(f"📊 Failed: {_im}")
-
-    st.markdown("---")
-    st.markdown(
-        "<div style='font-size:12px;font-weight:600;letter-spacing:0.1em;"
-        "text-transform:uppercase;color:#888;margin-bottom:6px'>AI News Carousel</div>",
-        unsafe_allow_html=True,
-    )
-    if st.button(
-        "📰  Generate AI News Now",
-        use_container_width=True,
-        help=(
-            "Fetch today's top 3 AI news stories via web search and publish a "
-            "5-slide branded carousel to Instagram + Facebook. Auto-runs daily at noon."
-        ),
-        key=f"{scope}_ai_news_btn",
-    ):
-        try:
-            _queue_command("create_ai_news", cooldown_key="create_ai_news")
-            st.info("AI News carousel queued — appears in Generated tab within ~3 min.")
-        except RuntimeError:
-            pass
-        except Exception:
-            st.error("Failed to queue AI news carousel.")
-
-    _news_last = load_last_command_status(db, "create_ai_news")
-    if _news_last:
-        _ns = _news_last.get("status", "")
-        _nm = _news_last.get("error") or ""
-        if _ns in ("pending", "running"):
-            st.caption("📰 AI news carousel generating…")
-        elif _ns == "done" and _nm:
-            st.caption(f"📰 {_nm}")
-        elif _nm:
-            st.caption(f"📰 Failed: {_nm}")
-
-    if st.button(
-        "🖼️  Regenerate news background",
-        use_container_width=True,
-        help=(
-            "Clears the stored AI background template for the news carousel. "
-            "The next carousel run (auto at noon or via Generate AI News Now) "
-            "will produce a fresh Higgsfield/Imagen background and save it as "
-            "the new template — no need to touch Supabase manually."
-        ),
-        key=f"{scope}_regen_news_bg",
-    ):
-        try:
-            _queue_command("regen_news_bg", cooldown_key="regen_news_bg")
-            st.info(
-                "Background reset queued — fresh AI background generates on the next carousel run."
-            )
-        except RuntimeError:
-            pass
-        except Exception:
-            st.error("Failed to queue background reset.")
-
-    _regen_last = load_last_command_status(db, "regen_news_bg")
-    if _regen_last:
-        _rs = _regen_last.get("status", "")
-        _rm = _regen_last.get("error") or ""
-        if _rs in ("pending", "running"):
-            st.caption("🖼️ Background reset running…")
-        elif _rs == "done" and _rm:
-            st.caption(f"🖼️ {_rm}")
-        elif _rm:
-            st.caption(f"🖼️ Failed: {_rm}")
-
-    st.markdown("---")
-    st.markdown(
-        "<div style='font-size:12px;font-weight:600;letter-spacing:0.1em;"
-        "text-transform:uppercase;color:#888;margin-bottom:6px'>Instagram Publishing</div>",
-        unsafe_allow_html=True,
-    )
-    _ig_api_mode, _ig_since = _get_instagram_mode(db)
-    if _ig_api_mode:
-        st.markdown(
-            "<div style='background:#E8F0FA;border:1px solid #0066CC;border-radius:12px;"
-            "padding:8px 12px;margin-bottom:8px;font-size:12px;font-weight:600;"
-            f"color:#003D7A'>📡 API mode{f' since {_ig_since}' if _ig_since else ''}</div>",
-            unsafe_allow_html=True,
-        )
         if st.button(
-            "📱  Back to Telegram",
+            "🩺  System Check",
             use_container_width=True,
-            type="primary",
-            key=f"{scope}_ig_telegram",
-            help="Route Instagram posts to Telegram again for manual native posting.",
-        ):
-            try:
-                _queue_command("instagram_telegram_mode", cooldown_key="instagram_mode")
-                st.success("Switching to Telegram mode — takes effect within ~2 min.")
-            except RuntimeError:
-                pass
-            except Exception:
-                st.error("Failed to queue mode switch.")
-    else:
-        st.markdown(
-            "<div style='background:#E8F5E9;border:1px solid #A5D6A7;border-radius:12px;"
-            "padding:8px 12px;margin-bottom:8px;font-size:12px;font-weight:600;"
-            "color:#2E7D32'>📱 Telegram mode (manual posting)</div>",
-            unsafe_allow_html=True,
-        )
-        if st.button(
-            "📡  Switch to API publishing",
-            use_container_width=True,
-            key=f"{scope}_ig_api",
             help=(
-                "Publish Instagram posts automatically via the Graph API. "
-                "Use when you can't check Telegram. "
-                "Organic reach may be lower than native posting."
+                "Runs a self-test inside the worker: which API keys it can see, "
+                "whether the image agents can start, and whether Supabase Storage "
+                "is writable. Use this when posts come out with no image."
             ),
+            key=f"{scope}_diagnostics",
         ):
             try:
-                _queue_command("instagram_api_mode", cooldown_key="instagram_mode")
-                st.info("Switching to API mode — Instagram posts will auto-publish within ~2 min.")
+                _queue_command("diagnostics", cooldown_key="diagnostics")
+                st.info("System check queued — the result appears below within ~2 min.")
             except RuntimeError:
                 pass
             except Exception:
-                st.error("Failed to queue mode switch.")
+                st.error("Failed to queue system check.")
+        _diag = load_last_command_status(db, "diagnostics")
+        if _diag:
+            _diag_status = _diag.get("status", "")
+            _diag_msg = _diag.get("error") or ""
+            if _diag_status == "done" and _diag_msg:
+                st.caption(f"🩺 Last system check: {_diag_msg}")
+            elif _diag_status in ("pending", "running"):
+                st.caption("🩺 System check running…")
 
+        if st.button(
+            "#️⃣  Trim hashtags to 5",
+            use_container_width=True,
+            help=(
+                "Scans every scheduled post, pulls any hashtags written into the caption "
+                "into the hashtags field, de-duplicates, and caps each post at 5 relevant "
+                "hashtags. Captions are left as clean prose."
+            ),
+            key=f"{scope}_cleanup_hashtags",
+        ):
+            try:
+                _queue_command("cleanup_hashtags", cooldown_key="cleanup_hashtags")
+                st.info("Hashtag cleanup queued — the result appears below within ~2 min.")
+            except RuntimeError:
+                pass
+            except Exception:
+                st.error("Failed to queue hashtag cleanup.")
+        _htc = load_last_command_status(db, "cleanup_hashtags")
+        if _htc:
+            _htc_status = _htc.get("status", "")
+            _htc_msg = _htc.get("error") or ""
+            if _htc_status == "done" and _htc_msg:
+                st.caption(f"#️⃣ {_htc_msg}")
+            elif _htc_status in ("pending", "running"):
+                st.caption("#️⃣ Hashtag cleanup running…")
+            elif _htc_msg:
+                st.caption(f"#️⃣ Failed: {_htc_msg}")
+
+        if st.button(
+            "🔑  Refresh Meta Token",
+            use_container_width=True,
+            help=(
+                "Re-exchanges the Facebook/Instagram long-lived token for a fresh "
+                "~60-day one and stores it so publishing keeps working without a "
+                "redeploy. Runs automatically every Sunday; use this to force it. "
+                "Requires FACEBOOK_APP_ID and FACEBOOK_APP_SECRET in Railway."
+            ),
+            key=f"{scope}_refresh_token",
+        ):
+            try:
+                _queue_command("refresh_token", cooldown_key="refresh_token")
+                st.info("Token refresh queued — the result appears below within ~2 min.")
+            except RuntimeError:
+                pass
+            except Exception:
+                st.error("Failed to queue token refresh.")
+        _tok = load_last_command_status(db, "refresh_token")
+        if _tok:
+            _tok_status = _tok.get("status", "")
+            _tok_msg = _tok.get("error") or ""
+            if _tok_status == "done" and _tok_msg:
+                st.caption(f"🔑 Last token refresh: {_tok_msg}")
+            elif _tok_status in ("pending", "running"):
+                st.caption("🔑 Token refresh running…")
+            elif _tok_msg:
+                st.caption(f"🔑 Last token refresh failed: {_tok_msg}")
+
+    # ── Refresh — always visible ──────────────────────────────────────────────
     if st.button("↺  Refresh data now", use_container_width=True, key=f"{scope}_refresh"):
         st.cache_data.clear()
         st.rerun()
