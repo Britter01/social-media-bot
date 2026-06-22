@@ -147,10 +147,11 @@ def make_news_bg_template(
         base = Image.open(io.BytesIO(base_bytes)).convert("RGB")
         base = ImageOps.fit(base, (w, h), Image.LANCZOS)
         img = base.convert("RGBA")
-        # Brite Blue tint so the brand colour reads through even if the image drifts.
-        img = Image.alpha_composite(img, Image.new("RGBA", (w, h), (*_BLUE_BG, 70)))
-        # Uniform dark knock-back so white text stays legible over the busy image.
-        img = Image.alpha_composite(img, Image.new("RGBA", (w, h), (*_NEWS_DARK_NAVY, 115)))
+        # Light Brite Blue tint — just enough to anchor the brand colour without
+        # smothering the AI image's depth and glow.
+        img = Image.alpha_composite(img, Image.new("RGBA", (w, h), (*_BLUE_BG, 45)))
+        # Gentle dark knock-back for text legibility; kept low so the AI texture shows.
+        img = Image.alpha_composite(img, Image.new("RGBA", (w, h), (*_NEWS_DARK_NAVY, 75)))
     else:
         img = Image.new("RGBA", (w, h), (*_BLUE_BG, 255))
 

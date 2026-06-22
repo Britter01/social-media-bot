@@ -1568,28 +1568,89 @@ def run_token_refresh() -> str:
 
 
 def run_regen_news_bg() -> str:
-    """Delete the cached news carousel background so the next run regenerates it via AI.
+    """Delete the cached news carousel background and immediately regenerate it via AI.
 
-    The background template lives at ``templates/news_carousel_bg.png`` in Supabase
-    Storage. On the next news carousel run (manual or cron) the NewsAgent will detect
-    a cache miss and call Higgsfield/Imagen to produce a fresh AI background, then
-    re-store it as the new template.
+    Deletes ``templates/news_carousel_bg.png`` from Supabase Storage, then calls
+    Higgsfield (Imagen fallback) to produce a fresh abstract Brite Blue background,
+    bakes the readability overlay, and stores the result as the new template.
+    Returns a detailed status string surfaced on the dashboard so the user can see
+    whether the AI generation succeeded or why it failed.
     """
-    from agents.news_agent import NewsAgent
+    from agents.news_agent import _NEWS_BG_PROMPT, NewsAgent
+    from core.image_utils import make_news_bg_template
     from core.storage import get_storage
 
     path = NewsAgent._BG_TEMPLATE_PATH
     logger.info("=== Regenerate news background: deleting %s ===", path)
+
     try:
         storage = get_storage()
-        ok = storage.delete(path)
     except Exception as exc:
-        logger.exception("Regenerate news background: storage delete failed")
-        return f"background reset failed: {type(exc).__name__}: {exc}"[:300]
+        logger.exception("Regenerate news background: storage unavailable")
+        return f"background reset failed: storage unavailable: {exc}"[:300]
 
-    if ok:
-        return "news background cleared — fresh AI background generates on the next carousel run"
-    return "news background: delete returned False — check Railway logs"
+    storage.delete(path)  # best-effort; missing template is fine
+
+    # Immediately generate a fresh AI background so the result is visible right away.
+    logger.info("Regenerate news background: generating fresh AI image")
+    ai_base: bytes | None = None
+    source = ""
+    fail_reason = ""
+
+    try:
+        from agents.infographic_agent import InfographicAgent
+
+        ia = InfographicAgent(config)
+    except Exception as exc:
+        fail_reason = f"could not init image agent: {exc}"
+        logger.warning("Regenerate news background: %s", fail_reason)
+        ia = None  # type: ignore[assignment]
+
+    if ia is not None:
+        if config.higgsfield_api_key:
+            try:
+                logger.info("Regenerate news background: trying Higgsfield (1:1)")
+                ai_base = ia._higgsfield_background(aspect_ratio="1:1", prompt=_NEWS_BG_PROMPT)
+                source = "Higgsfield"
+            except Exception as exc:
+                fail_reason = f"Higgsfield: {exc}"
+                logger.warning("Regenerate news background: Higgsfield failed: %s", exc)
+
+        if ai_base is None and config.google_api_key:
+            try:
+                logger.info("Regenerate news background: trying Imagen (1:1)")
+                ai_base = ia._imagen_background(aspect_ratio="1:1", prompt=_NEWS_BG_PROMPT)
+                source = "Imagen"
+            except Exception as exc:
+                fail_reason = f"Higgsfield+Imagen both failed; last error: {exc}"
+                logger.warning("Regenerate news background: Imagen also failed: %s", exc)
+
+    if ai_base is None:
+        if not (config.higgsfield_api_key or config.google_api_key):
+            fail_reason = "no image API key configured (HIGGSFIELD_API_KEY / GOOGLE_API_KEY)"
+        return (
+            f"template cleared — AI generation failed ({fail_reason or 'unknown reason'}). "
+            "Check Railway logs. A plain gradient will be used until a key is configured."
+        )
+
+    try:
+        template = make_news_bg_template(base_bytes=ai_base)
+    except Exception as exc:
+        logger.exception("Regenerate news background: bake failed")
+        return f"AI image generated via {source} but bake failed: {exc}"[:300]
+
+    try:
+        storage.upload(path, template, content_type="image/png")
+    except Exception as exc:
+        logger.exception("Regenerate news background: upload failed")
+        return f"AI background generated via {source} but upload failed: {exc}"[:300]
+
+    msg = (
+        f"new AI background generated via {source} ({len(template) // 1024} kb) "
+        "and stored — next carousel run will use it"
+    )
+    logger.info("=== Regenerate news background: %s ===", msg)
+    return msg
 
 
 def run_daily_ai_news(manual: bool = False) -> str:
