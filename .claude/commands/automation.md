@@ -1,6 +1,13 @@
 # Brite Tech Lifestyle — Automation System Knowledge Base
 
-Invoke this skill (`/automation`) whenever working on this codebase. It captures every architectural decision, what worked, what failed, and how to reproduce the final system. Read it before making changes so you don't re-learn the same lessons.
+TRIGGER — load this skill BEFORE writing, editing, or debugging any code in this repository. Do not skip it because a task looks small or obvious — the lessons here prevent re-learning the same mistakes. Auto-invoke whenever:
+- any file in this repo is being edited (agents/, core/, scheduler/, dashboard/, tests/)
+- a new feature, pipeline step, or platform is being added
+- a bug or unexpected behaviour is being investigated
+- architectural or integration decisions are being made (publishing strategy, IPC, feature flags, Streamlit patterns)
+- the user asks about how something works or why it was built a certain way
+
+This file captures every decision, what worked, what failed, and how to reproduce the system.
 
 ---
 

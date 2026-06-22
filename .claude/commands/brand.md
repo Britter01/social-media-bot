@@ -1,6 +1,14 @@
 # Brite Tech Lifestyle — Brand Kit Reference
 
-Use this skill whenever you are editing the dashboard, README, diagrams, infographic templates, or any user-facing copy. Apply these guidelines without being asked.
+TRIGGER — load this skill BEFORE making any change that a user will see or that involves visual design. Do not rely on memory for colours, font weights, or button specs — always read from here. Auto-invoke whenever:
+- editing `dashboard/app.py` (CSS, button styles, component layout, wording)
+- editing `README.md` or any documentation
+- updating the process diagram (`FLOW_HTML` in `dashboard/app.py`)
+- changing infographic or carousel visual templates (`infographic_agent.py`, `carousel_agent.py`)
+- writing UI labels, button text, status messages, section headings, or any copy the user reads
+- someone asks what the brand colours, fonts, or design rules are
+
+Apply these guidelines without being asked — never guess at a hex value or font weight.
 
 ---
 
