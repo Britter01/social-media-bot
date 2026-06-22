@@ -49,6 +49,19 @@ class Storage:
                 return None
             raise
 
+    def delete(self, path: str) -> bool:
+        """Delete ``path`` from the bucket.
+
+        Returns True if the object was deleted (or didn't exist), False on error.
+        """
+        try:
+            self._client.storage.from_(self._bucket).remove([path])
+            logger.info("Deleted %s from bucket %s", path, self._bucket)
+            return True
+        except Exception:
+            logger.exception("Failed to delete %s from bucket %s", path, self._bucket)
+            return False
+
     def upload(
         self,
         path: str,

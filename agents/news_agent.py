@@ -33,6 +33,16 @@ _WEB_SEARCH_TOOL = {
 }
 _MAX_WEB_TURNS = 5
 
+# Brite Blue abstract background for the news carousel — same rich AI aesthetic
+# as the infographics, kept in the brand's accent blue. Generated once via
+# Higgsfield (Imagen fallback), then stored as a reusable template.
+_NEWS_BG_PROMPT = (
+    "abstract AI neural network background, deep Brite Blue and electric cobalt tones, "
+    "glowing interconnected nodes and luminous data trails, dark navy cosmic depth, "
+    "subtle geometric grid lines, cinematic volumetric light, rich saturated blue gradient, "
+    "premium editorial tech aesthetic, 3D depth, no text, no letters, no words"
+)
+
 
 class NewsStory(BaseModel):
     headline: str = Field(description="News headline — max 10 words, factual, no hype.")
@@ -88,31 +98,79 @@ class NewsAgent:
     _BG_TEMPLATE_PATH = "templates/news_carousel_bg.png"
 
     def _get_bg_template(self) -> bytes | None:
-        """Return the gradient background template bytes.
+        """Return the news-carousel background template bytes.
 
-        On first call the template doesn't exist yet — generate it with Pillow
-        and upload to Supabase so every subsequent call is a fast download.
-        Returns None if storage is unavailable (slides fall back to flat colour).
+        First run: generate a rich Brite Blue abstract background via Higgsfield
+        (Imagen fallback), bake in the readability gradient, and upload to
+        Supabase. Every subsequent run is a fast download of that template.
+        If no image API is available, falls back to a pure Pillow gradient.
+        Returns None only when storage is unavailable AND no fallback renders.
         """
         from core.image_utils import make_news_bg_template
 
-        if self._storage is None:
-            return None
+        # Persistent template hit — reuse the stored background, no generation.
+        if self._storage is not None:
+            try:
+                cached = self._storage.download(self._BG_TEMPLATE_PATH)
+                if cached:
+                    logger.info("NewsAgent: using stored background template")
+                    return cached
+            except Exception:
+                logger.warning("NewsAgent: template download failed", exc_info=True)
 
-        cached = self._storage.download(self._BG_TEMPLATE_PATH)
-        if cached:
-            logger.info("NewsAgent: using cached background template")
-            return cached
-
+        # First run (or storage miss) — generate the AI base, bake the template.
         logger.info("NewsAgent: generating background template for the first time")
+        ai_base = self._generate_ai_background()
         try:
-            bg_bytes = make_news_bg_template()
-            self._storage.upload(self._BG_TEMPLATE_PATH, bg_bytes, content_type="image/png")
-            logger.info("NewsAgent: background template uploaded to %s", self._BG_TEMPLATE_PATH)
-            return bg_bytes
+            template = make_news_bg_template(base_bytes=ai_base)
         except Exception:
-            logger.exception("NewsAgent: failed to generate/upload background template")
+            logger.exception("NewsAgent: failed to bake background template")
             return None
+
+        if self._storage is not None:
+            try:
+                self._storage.upload(self._BG_TEMPLATE_PATH, template, content_type="image/png")
+                logger.info("NewsAgent: background template stored at %s", self._BG_TEMPLATE_PATH)
+            except Exception:
+                logger.warning("NewsAgent: failed to store background template", exc_info=True)
+
+        return template
+
+    def _generate_ai_background(self) -> bytes | None:
+        """Generate a Brite Blue abstract background via Higgsfield (Imagen fallback).
+
+        Returns the raw image bytes, or None if no image API is configured or
+        both providers fail — in which case the caller bakes a pure gradient.
+        """
+        if not (self._cfg.higgsfield_api_key or self._cfg.google_api_key):
+            logger.info("NewsAgent: no image API configured — using gradient background")
+            return None
+
+        try:
+            from agents.infographic_agent import InfographicAgent
+
+            ia = InfographicAgent(self._cfg)
+        except Exception:
+            logger.warning("NewsAgent: could not init image agent for background", exc_info=True)
+            return None
+
+        if self._cfg.higgsfield_api_key:
+            try:
+                logger.info("NewsAgent: generating background via Higgsfield")
+                return ia._higgsfield_background(aspect_ratio="1:1", prompt=_NEWS_BG_PROMPT)
+            except Exception:
+                logger.warning(
+                    "NewsAgent: Higgsfield background failed; trying Imagen", exc_info=True
+                )
+
+        if self._cfg.google_api_key:
+            try:
+                logger.info("NewsAgent: generating background via Imagen")
+                return ia._imagen_background(aspect_ratio="1:1", prompt=_NEWS_BG_PROMPT)
+            except Exception:
+                logger.warning("NewsAgent: Imagen background failed", exc_info=True)
+
+        return None
 
     # ── Public API ────────────────────────────────────────────────────────────
 

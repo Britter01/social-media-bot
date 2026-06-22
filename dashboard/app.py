@@ -964,6 +964,38 @@ def _render_pipeline_controls(scope: str) -> None:
         elif _nm:
             st.caption(f"📰 Failed: {_nm}")
 
+    if st.button(
+        "🖼️  Regenerate news background",
+        use_container_width=True,
+        help=(
+            "Clears the stored AI background template for the news carousel. "
+            "The next carousel run (auto at noon or via Generate AI News Now) "
+            "will produce a fresh Higgsfield/Imagen background and save it as "
+            "the new template — no need to touch Supabase manually."
+        ),
+        key=f"{scope}_regen_news_bg",
+    ):
+        try:
+            _queue_command("regen_news_bg", cooldown_key="regen_news_bg")
+            st.info(
+                "Background reset queued — fresh AI background generates on the next carousel run."
+            )
+        except RuntimeError:
+            pass
+        except Exception:
+            st.error("Failed to queue background reset.")
+
+    _regen_last = load_last_command_status(db, "regen_news_bg")
+    if _regen_last:
+        _rs = _regen_last.get("status", "")
+        _rm = _regen_last.get("error") or ""
+        if _rs in ("pending", "running"):
+            st.caption("🖼️ Background reset running…")
+        elif _rs == "done" and _rm:
+            st.caption(f"🖼️ {_rm}")
+        elif _rm:
+            st.caption(f"🖼️ Failed: {_rm}")
+
     if st.button("↺  Refresh data now", use_container_width=True, key=f"{scope}_refresh"):
         st.cache_data.clear()
         st.rerun()

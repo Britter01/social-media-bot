@@ -1269,6 +1269,8 @@ def run_pending_commands() -> None:
                 )
             elif command == "create_ai_news":
                 result_msg = run_daily_ai_news(manual=True)
+            elif command == "regen_news_bg":
+                result_msg = run_regen_news_bg()
             elif command == "cleanup_hashtags":
                 result_msg = run_cleanup_hashtags()
             elif command.startswith("schedule_post|"):
@@ -1563,6 +1565,31 @@ def run_token_refresh() -> str:
         )
     logger.info("=== Meta token refresh: %s ===", msg)
     return msg
+
+
+def run_regen_news_bg() -> str:
+    """Delete the cached news carousel background so the next run regenerates it via AI.
+
+    The background template lives at ``templates/news_carousel_bg.png`` in Supabase
+    Storage. On the next news carousel run (manual or cron) the NewsAgent will detect
+    a cache miss and call Higgsfield/Imagen to produce a fresh AI background, then
+    re-store it as the new template.
+    """
+    from agents.news_agent import NewsAgent
+    from core.storage import get_storage
+
+    path = NewsAgent._BG_TEMPLATE_PATH
+    logger.info("=== Regenerate news background: deleting %s ===", path)
+    try:
+        storage = get_storage()
+        ok = storage.delete(path)
+    except Exception as exc:
+        logger.exception("Regenerate news background: storage delete failed")
+        return f"background reset failed: {type(exc).__name__}: {exc}"[:300]
+
+    if ok:
+        return "news background cleared — fresh AI background generates on the next carousel run"
+    return "news background: delete returned False — check Railway logs"
 
 
 def run_daily_ai_news(manual: bool = False) -> str:

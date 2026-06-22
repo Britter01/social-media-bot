@@ -658,8 +658,10 @@ class InfographicAgent:
 
         return bg_bytes, source
 
-    def _higgsfield_background(self, topic: str, aspect_ratio: str = "9:16") -> bytes:
-        prompt = self._bg_prompt(topic, aspect_ratio)
+    def _higgsfield_background(
+        self, topic: str = "", aspect_ratio: str = "9:16", prompt: str | None = None
+    ) -> bytes:
+        prompt = prompt or self._bg_prompt(topic, aspect_ratio)
 
         headers = {
             "Authorization": f"Key {self._cfg.higgsfield_api_key}",
@@ -710,13 +712,15 @@ class InfographicAgent:
 
         raise RuntimeError("Higgsfield timed out after 5 minutes")
 
-    def _imagen_background(self, topic: str, aspect_ratio: str = "9:16") -> bytes:
+    def _imagen_background(
+        self, topic: str = "", aspect_ratio: str = "9:16", prompt: str | None = None
+    ) -> bytes:
         if not self._cfg.google_api_key:
             raise RuntimeError("Neither Higgsfield nor Google API key configured")
         from google import genai
         from google.genai import types
 
-        prompt = self._bg_prompt(topic, aspect_ratio)
+        prompt = prompt or self._bg_prompt(topic, aspect_ratio)
         client = genai.Client(api_key=self._cfg.google_api_key)
         resp = client.models.generate_images(
             model=self._cfg.imagen_model,

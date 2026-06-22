@@ -122,28 +122,47 @@ _BLUE_TAGLINE = (255, 255, 255, 160)  # white, slightly faded
 _NEWS_DARK_NAVY = (2, 6, 22)  # very dark navy used for the bottom fade
 
 
-def make_news_bg_template(size: tuple[int, int] = (1080, 1080)) -> bytes:
-    """Render the reusable Brite Blue → dark navy gradient background for news slides.
+def make_news_bg_template(
+    size: tuple[int, int] = (1080, 1080), base_bytes: bytes | None = None
+) -> bytes:
+    """Render the reusable news-carousel background, ready for text on top.
 
-    Brite Blue (#0066CC) is vivid at the top; a smooth dark-navy fade
-    (matching the rich infographic bottom-fade aesthetic) covers the lower
-    two-thirds so white text sits on a dark, high-contrast surface.
-    Generated once, stored in Supabase, and reused on every carousel run.
+    Two modes:
+      * ``base_bytes`` provided — an AI-generated (Higgsfield/Imagen) abstract
+        image is used as the base. It's cover-cropped to ``size``, given a Brite
+        Blue tint so the brand colour always reads through, then a uniform dark
+        layer + a dark-navy bottom fade are baked in for text readability —
+        matching the rich infographic aesthetic.
+      * ``base_bytes`` omitted — a pure Brite Blue → dark navy gradient is drawn
+        in code (used as a fallback when no image API is available).
+
+    The result already includes the readability overlay, so callers draw text
+    straight on top. Generated once, stored in Supabase, reused on every run.
     """
-    from PIL import Image, ImageDraw
+    from PIL import Image, ImageDraw, ImageOps
 
     w, h = size
-    img = Image.new("RGB", (w, h), _BLUE_BG)
 
+    if base_bytes:
+        base = Image.open(io.BytesIO(base_bytes)).convert("RGB")
+        base = ImageOps.fit(base, (w, h), Image.LANCZOS)
+        img = base.convert("RGBA")
+        # Brite Blue tint so the brand colour reads through even if the image drifts.
+        img = Image.alpha_composite(img, Image.new("RGBA", (w, h), (*_BLUE_BG, 70)))
+        # Uniform dark knock-back so white text stays legible over the busy image.
+        img = Image.alpha_composite(img, Image.new("RGBA", (w, h), (*_NEWS_DARK_NAVY, 115)))
+    else:
+        img = Image.new("RGBA", (w, h), (*_BLUE_BG, 255))
+
+    # Dark-navy bottom fade — light at top, heavy at the bottom where body text sits.
     grad = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     dg = ImageDraw.Draw(grad)
-    fade_start = int(h * 0.22)
+    fade_start = int(h * 0.18)
     for y in range(fade_start, h):
         t = (y - fade_start) / (h - fade_start)
-        alpha = int(228 * (t**0.50))
+        alpha = int(205 * (t**0.55))
         dg.line([(0, y), (w, y)], fill=(*_NEWS_DARK_NAVY, alpha))
-
-    img = Image.alpha_composite(img.convert("RGBA"), grad)
+    img = Image.alpha_composite(img, grad)
 
     out = io.BytesIO()
     img.convert("RGB").save(out, format="PNG", optimize=True)
