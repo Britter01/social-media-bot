@@ -198,6 +198,11 @@ components.html(
       [data-testid="stSidebar"] { display: none !important; }
     }
 
+    /* Main-body pipeline expander is redundant on desktop — sidebar shows it */
+    @media (min-width: 768px) {
+      .btl-pipeline-main { display: none !important; }
+    }
+
     /* Logo in the main header is shown only on mobile (the sidebar logo is
        hidden there). Hidden on desktop, where the sidebar logo is visible. */
     .btl-mobile-logo { display: none; }
@@ -372,96 +377,91 @@ components.html(
     doc.getElementById('btl-css').textContent = CSS;
   }
 
-  /* ── Keep scroll position and the active tab across reruns ─────────────────
-        Streamlit reruns the whole script on every button click, which resets
-        the scroll position to the top AND snaps tab selection back to the
-        first tab. We persist both in the parent page's sessionStorage and
-        restore them once after each rerun. */
+  /* ── Keep scroll position and active tab across Streamlit reruns ────────────
+        Every button click triggers a full React re-render, which resets scroll
+        to the top and snaps the tab back to index 0. We persist both in
+        sessionStorage and restore them via a permanent polling interval — the
+        iframe is cached between reruns so its JS (and the interval) keeps
+        running indefinitely, correcting every reset React makes. */
   const ss = window.parent.sessionStorage;
   const SK = 'btl-scrollTop';
   const TK = 'btl-activeTab';
 
-  function scroller() {
-    return doc.querySelector('[data-testid="stMain"]')
-        || doc.querySelector('section.main')
-        || doc.scrollingElement
-        || doc.documentElement;
-  }
-
-  let scrollDone = false;
-  let tabDone = false;
-
-  function wire() {
-    /* Scroll: remember position on scroll, restore once per rerun. */
-    const sc = scroller();
-    if (sc) {
-      if (!sc.dataset.btlScrollWired) {
-        sc.dataset.btlScrollWired = '1';
-        sc.addEventListener(
-          'scroll',
-          () => { ss.setItem(SK, String(sc.scrollTop)); },
-          { passive: true }
-        );
-      }
-      if (!scrollDone) {
-        scrollDone = true;
-        const sv = ss.getItem(SK);
-        const y = sv !== null ? parseInt(sv, 10) : NaN;
-        if (!isNaN(y) && y > 0) {
-          [120, 300, 600].forEach((d) =>
-            setTimeout(() => { try { sc.scrollTop = y; } catch (e) {} }, d)
-          );
-        }
-      }
+  /* ── Scroll ── */
+  (function () {
+    const sc = doc.querySelector('[data-testid="stMain"]')
+             || doc.querySelector('section.main')
+             || doc.scrollingElement
+             || doc.documentElement;
+    if (!sc) return;
+    if (!sc.dataset.btlScrollWired) {
+      sc.dataset.btlScrollWired = '1';
+      sc.addEventListener('scroll', () => ss.setItem(SK, String(sc.scrollTop)), { passive: true });
     }
+    const sv = ss.getItem(SK);
+    const y  = sv !== null ? parseInt(sv, 10) : NaN;
+    if (!isNaN(y) && y > 0) {
+      [120, 300, 600].forEach((d) => setTimeout(() => { try { sc.scrollTop = y; } catch (e) {} }, d));
+    }
+  })();
 
-    /* Tabs: remember the selected tab, re-select it on rerun.
-       We keep retrying on each poll tick rather than giving up after one
-       click, because React can re-render the tab rail back to index 0
-       after our simulated click.  We only stop when the correct tab is
-       visibly selected, or when the user manually clicks a tab. */
-    const list = doc.querySelector('.stTabs [data-baseweb="tab-list"]');
-    if (list) {
+  /* ── Tab click capture (event delegation on a stable ancestor) ────────────
+       React may replace the [data-baseweb="tab"] nodes between reruns, so
+       attaching listeners directly to them would lose the handlers. Instead
+       we listen at the app root, which survives across reruns. */
+  (function () {
+    const root = doc.querySelector('[data-testid="stApp"]') || doc.body;
+    if (root.dataset.btlTabDelegated) return;
+    root.dataset.btlTabDelegated = '1';
+    root.addEventListener('click', (ev) => {
+      if (!ev.isTrusted) return;
+      const tab = ev.target.closest('[data-baseweb="tab"]');
+      if (!tab) return;
+      const list = tab.closest('[data-baseweb="tab-list"]');
+      if (!list) return;
       const tabs = list.querySelectorAll('[data-baseweb="tab"]');
-      if (tabs.length) {
-        if (!list.dataset.btlTabWired) {
-          list.dataset.btlTabWired = '1';
-          tabs.forEach((t, i) =>
-            /* Only a *real* user click (isTrusted) saves the index and stops
-               the restore loop. A scripted .click() below is NOT trusted, so
-               it won't prematurely set tabDone — letting us keep retrying
-               until React actually settles on the right tab. */
-            t.addEventListener('click', (ev) => {
-              if (ev.isTrusted) { ss.setItem(TK, String(i)); tabDone = true; }
-            })
-          );
-        }
-        if (!tabDone) {
-          const want = ss.getItem(TK);
-          const idx = want !== null ? parseInt(want, 10) : NaN;
-          if (!isNaN(idx) && idx >= 0 && idx < tabs.length) {
-            const cur = list.querySelector('[aria-selected="true"]');
-            const ci  = Array.prototype.indexOf.call(tabs, cur);
-            if (ci === idx) {
-              tabDone = true;   /* already on the right tab — stop */
-            } else {
-              tabs[idx].click(); /* keep retrying each poll tick */
-            }
-          } else {
-            tabDone = true;     /* no valid target */
+      const i = Array.prototype.indexOf.call(tabs, tab);
+      if (i >= 0) ss.setItem(TK, String(i));
+    }, true);
+  })();
+
+  /* ── Permanent 250 ms poll ────────────────────────────────────────────────
+       On each tick:
+       1. If the active tab doesn't match sessionStorage, click the right one.
+       2. Tag the main-body pipeline expander so the CSS can hide it on desktop
+          (the sidebar already shows those controls on wide screens). */
+  let btlRestoring = false;
+  setInterval(() => {
+    /* Tab restore */
+    if (!btlRestoring) {
+      const list = doc.querySelector('.stTabs [data-baseweb="tab-list"]');
+      if (list) {
+        const want = ss.getItem(TK);
+        const idx  = want !== null ? parseInt(want, 10) : NaN;
+        if (!isNaN(idx)) {
+          const tabs = list.querySelectorAll('[data-baseweb="tab"]');
+          const cur  = list.querySelector('[aria-selected="true"]');
+          const ci   = Array.prototype.indexOf.call(tabs, cur);
+          if (ci !== idx && idx < tabs.length) {
+            btlRestoring = true;
+            tabs[idx].click();
+            setTimeout(() => { btlRestoring = false; }, 500);
           }
         }
       }
     }
-  }
 
-  /* Poll briefly because Streamlit renders the tab rail asynchronously. */
-  let tries = 0;
-  const iv = setInterval(() => {
-    wire();
-    if ((scrollDone && tabDone) || ++tries > 25) clearInterval(iv);
-  }, 120);
-  wire();
+    /* Tag pipeline controls expander for desktop hiding */
+    const main = doc.querySelector('[data-testid="stMain"]');
+    if (main) {
+      main.querySelectorAll('[data-testid="stExpander"]').forEach((el) => {
+        const sum = el.querySelector('summary');
+        if (sum && sum.textContent.includes('Pipeline controls')) {
+          el.classList.add('btl-pipeline-main');
+        }
+      });
+    }
+  }, 250);
 
 
 })();

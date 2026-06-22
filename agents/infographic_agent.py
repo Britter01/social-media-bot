@@ -200,9 +200,11 @@ _MUSIC_QUERIES = [
 ]
 
 
-# ── Emoji stripping ───────────────────────────────────────────────────────────
-# Brand fonts (BriteHero-Bold, Figtree, PlayfairDisplay) lack emoji glyphs,
-# causing Pillow to render them as tofu squares (□). Strip before drawing.
+# ── Text sanitisation ─────────────────────────────────────────────────────────
+# Brand fonts (BriteHero-Bold, Figtree, PlayfairDisplay) lack many Unicode
+# glyphs, causing Pillow to render unsupported characters as tofu squares (□).
+# We strip emoji ranges AND replace common "smart" punctuation/symbols with
+# ASCII equivalents before drawing any text.
 _EMOJI_RE = re.compile(
     "["
     "\U0001f300-\U0001f9ff"
@@ -218,9 +220,45 @@ _EMOJI_RE = re.compile(
     re.UNICODE,
 )
 
+# Smart punctuation and common symbols that AI models produce but brand fonts
+# often lack — map each to a safe ASCII equivalent.
+_SMART_MAP = str.maketrans(
+    {
+        "‘": "'",
+        "’": "'",
+        "“": '"',
+        "”": '"',
+        "–": "-",
+        "—": " - ",
+        "…": "...",
+        "•": "-",
+        "‣": "-",
+        "×": "x",
+        "÷": "/",
+        "±": "+/-",
+        "→": "->",
+        "←": "<-",
+        "↑": "^",
+        "↓": "v",
+        "≈": "~",
+        "≤": "<=",
+        "≥": ">=",
+        "©": "(c)",
+        "®": "(R)",
+        "™": "(TM)",
+    }
+)
+
+# Catch-all: drop anything outside printable ASCII + Western Latin Extended
+# (U+0000–U+024F) that slipped past the emoji and smart-map filters.
+_NON_LATIN_RE = re.compile(r"[^\x00-ɏ]+")
+
 
 def _strip_emojis(text: str) -> str:
-    return _EMOJI_RE.sub("", text).strip()
+    """Strip emoji, replace smart punctuation with ASCII, drop non-Latin glyphs."""
+    text = _EMOJI_RE.sub("", text)
+    text = text.translate(_SMART_MAP)
+    return _NON_LATIN_RE.sub("", text).strip()
 
 
 # ── Pydantic models for structured Claude output ──────────────────────────────
