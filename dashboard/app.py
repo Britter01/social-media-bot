@@ -648,6 +648,38 @@ def _get_automation_state(_db) -> tuple[bool, str | None]:
         return False, None
 
 
+def _get_instagram_mode(_db) -> tuple[bool, str | None]:
+    """Return (is_api_mode, since_str).
+
+    Checks the most recent completed instagram_api_mode / instagram_telegram_mode
+    command. Default (no commands yet) = Telegram mode.
+    """
+    try:
+        result = (
+            _db.table("pipeline_commands")
+            .select("command, finished_at")
+            .in_("command", ["instagram_api_mode", "instagram_telegram_mode"])
+            .eq("status", "done")
+            .order("finished_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        rows = result.data or []
+        if not rows:
+            return False, None
+        row = rows[0]
+        api_mode = row["command"] == "instagram_api_mode"
+        raw_ts = row.get("finished_at") or ""
+        try:
+            dt = datetime.fromisoformat(raw_ts.replace("Z", "+00:00"))
+            since = dt.strftime("%d %b %Y · %H:%M UTC")
+        except Exception:
+            since = raw_ts or None
+        return api_mode, since
+    except Exception:
+        return False, None
+
+
 analytics_rows, analytics_error = load_analytics(db)
 # Build lookup: post_id -> best snapshot (prefer 7d over 24h)
 analytics_by_post: dict[str, dict] = {}
@@ -1077,6 +1109,59 @@ def _render_pipeline_controls(scope: str) -> None:
             st.caption(f"🖼️ {_rm}")
         elif _rm:
             st.caption(f"🖼️ Failed: {_rm}")
+
+    st.markdown("---")
+    st.markdown(
+        "<div style='font-size:12px;font-weight:600;letter-spacing:0.1em;"
+        "text-transform:uppercase;color:#888;margin-bottom:6px'>Instagram Publishing</div>",
+        unsafe_allow_html=True,
+    )
+    _ig_api_mode, _ig_since = _get_instagram_mode(db)
+    if _ig_api_mode:
+        st.markdown(
+            "<div style='background:#E8F0FA;border:1px solid #0066CC;border-radius:12px;"
+            "padding:8px 12px;margin-bottom:8px;font-size:12px;font-weight:600;"
+            f"color:#003D7A'>📡 API mode{f' since {_ig_since}' if _ig_since else ''}</div>",
+            unsafe_allow_html=True,
+        )
+        if st.button(
+            "📱  Back to Telegram",
+            use_container_width=True,
+            type="primary",
+            key=f"{scope}_ig_telegram",
+            help="Route Instagram posts to Telegram again for manual native posting.",
+        ):
+            try:
+                _queue_command("instagram_telegram_mode", cooldown_key="instagram_mode")
+                st.success("Switching to Telegram mode — takes effect within ~2 min.")
+            except RuntimeError:
+                pass
+            except Exception:
+                st.error("Failed to queue mode switch.")
+    else:
+        st.markdown(
+            "<div style='background:#E8F5E9;border:1px solid #A5D6A7;border-radius:12px;"
+            "padding:8px 12px;margin-bottom:8px;font-size:12px;font-weight:600;"
+            "color:#2E7D32'>📱 Telegram mode (manual posting)</div>",
+            unsafe_allow_html=True,
+        )
+        if st.button(
+            "📡  Switch to API publishing",
+            use_container_width=True,
+            key=f"{scope}_ig_api",
+            help=(
+                "Publish Instagram posts automatically via the Graph API. "
+                "Use when you can't check Telegram. "
+                "Organic reach may be lower than native posting."
+            ),
+        ):
+            try:
+                _queue_command("instagram_api_mode", cooldown_key="instagram_mode")
+                st.info("Switching to API mode — Instagram posts will auto-publish within ~2 min.")
+            except RuntimeError:
+                pass
+            except Exception:
+                st.error("Failed to queue mode switch.")
 
     if st.button("↺  Refresh data now", use_container_width=True, key=f"{scope}_refresh"):
         st.cache_data.clear()

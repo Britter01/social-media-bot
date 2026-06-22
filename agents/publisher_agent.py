@@ -130,11 +130,12 @@ class PublisherAgent:
             post.mark(PostStatus.PUBLISHED)
             return post
 
-        # Instagram: route to Telegram for manual native publishing.
+        # Instagram: route to Telegram for manual native publishing by default.
         # Graph API-published posts receive consistently lower algorithmic reach
-        # than content uploaded natively in the app. Posts land in MANUAL_READY
-        # and Telegram delivers the image + caption to the user's phone.
-        if post.platform == Platform.INSTAGRAM.value:
+        # than content uploaded natively in the app. When the API-mode flag is
+        # set in Supabase Storage the Graph API path is used instead (e.g. when
+        # the user can't check Telegram for a period).
+        if post.platform == Platform.INSTAGRAM.value and not self._is_instagram_api_mode():
             return self._route_instagram_to_telegram(post)
 
         dispatch = {
@@ -355,6 +356,16 @@ class PublisherAgent:
             )
             publish.raise_for_status()
             return publish.json().get("id", container_id)
+
+    @staticmethod
+    def _is_instagram_api_mode() -> bool:
+        """Return True if the Instagram Graph API publish flag is active in Supabase Storage."""
+        try:
+            from core.storage import get_storage
+
+            return get_storage().download("config/instagram.api_mode") is not None
+        except Exception:
+            return False
 
     def _route_instagram_to_telegram(self, post: Post) -> Post:
         """Send post to Telegram and mark MANUAL_READY for native Instagram publishing."""

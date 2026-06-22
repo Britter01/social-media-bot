@@ -1249,6 +1249,10 @@ def run_pending_commands() -> None:
                 result_msg = run_pause_automation()
             elif command == "resume_automation":
                 result_msg = run_resume_automation()
+            elif command == "instagram_api_mode":
+                result_msg = run_instagram_api_mode()
+            elif command == "instagram_telegram_mode":
+                result_msg = run_instagram_telegram_mode()
             elif _is_automation_paused():
                 # All other commands are skipped while automation is paused.
                 result_msg = "automation paused — command skipped"
@@ -1468,6 +1472,50 @@ def run_resume_automation() -> str:
         logger.exception("Could not delete automation pause flag")
         return f"resume flag delete failed: {type(exc).__name__}: {exc}"[:300]
     return "automation resumed — all pipeline jobs running normally"
+
+
+_INSTAGRAM_API_FLAG_PATH = "config/instagram.api_mode"
+
+
+def _is_instagram_api_mode() -> bool:
+    """Return True if Instagram posts should publish via the Graph API.
+
+    Default (flag absent) = Telegram mode. Fail-open: if Storage is
+    unreachable we assume Telegram mode so posts aren't accidentally
+    published via the API against the user's preference.
+    """
+    try:
+        from core.storage import get_storage
+
+        return get_storage().download(_INSTAGRAM_API_FLAG_PATH) is not None
+    except Exception:
+        return False
+
+
+def run_instagram_api_mode() -> str:
+    """Switch Instagram publishing to the Graph API."""
+    from core.storage import get_storage
+
+    logger.warning("=== INSTAGRAM switching to Graph API publish mode ===")
+    try:
+        get_storage().upload(_INSTAGRAM_API_FLAG_PATH, b"api_mode", content_type="text/plain")
+    except Exception as exc:
+        logger.exception("Could not write instagram api_mode flag")
+        return f"instagram api mode flag write failed: {type(exc).__name__}: {exc}"[:300]
+    return "instagram api mode enabled — posts will publish automatically via Graph API"
+
+
+def run_instagram_telegram_mode() -> str:
+    """Switch Instagram publishing back to Telegram (manual native posting)."""
+    from core.storage import get_storage
+
+    logger.warning("=== INSTAGRAM switching back to Telegram mode ===")
+    try:
+        get_storage().delete(_INSTAGRAM_API_FLAG_PATH)
+    except Exception as exc:
+        logger.exception("Could not delete instagram api_mode flag")
+        return f"instagram telegram mode flag delete failed: {type(exc).__name__}: {exc}"[:300]
+    return "instagram telegram mode restored — posts will be sent to Telegram for manual posting"
 
 
 def run_infographic_pipeline(
