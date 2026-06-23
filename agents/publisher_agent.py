@@ -72,6 +72,13 @@ def _validate_media_url(url: str | None, label: str = "url") -> str:
 logger = logging.getLogger(__name__)
 
 
+def _ensure_utc(dt: datetime) -> datetime:
+    """Return *dt* with UTC tzinfo attached; no-op if already timezone-aware."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt
+
+
 class PublishError(RuntimeError):
     """Raised when a platform rejects a publish request."""
 
@@ -137,6 +144,18 @@ class PublisherAgent:
         # the user can't check Telegram for a period).
         if post.platform == Platform.INSTAGRAM.value and not self._is_instagram_api_mode():
             return self._route_instagram_to_telegram(post)
+
+        # Per-platform Telegram mode (Facebook, Twitter, LinkedIn)
+        if post.platform in (
+            Platform.FACEBOOK.value,
+            Platform.TWITTER.value,
+            Platform.LINKEDIN.value,
+        ):
+            tg_since = self._get_platform_telegram_since(post.platform)
+            if tg_since is not None:
+                post_created = post.created_at
+                if post_created is None or _ensure_utc(post_created) >= tg_since:
+                    return self._route_to_telegram(post)
 
         dispatch = {
             Platform.INSTAGRAM.value: self._publish_instagram,
@@ -366,6 +385,38 @@ class PublisherAgent:
             return get_storage().download("config/instagram.api_mode") is not None
         except Exception:
             return False
+
+    @staticmethod
+    def _get_platform_telegram_since(platform: str) -> datetime | None:
+        """Return enablement datetime for Telegram mode on *platform*, or None."""
+        try:
+            from core.storage import get_storage
+
+            data = get_storage().download(f"config/telegram_mode.{platform}")
+            if data is None:
+                return None
+            ts = data.decode().strip()
+            dt = datetime.fromisoformat(ts)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=UTC)
+            return dt
+        except Exception:
+            return None
+
+    def _route_to_telegram(self, post: Post) -> Post:
+        """Send post to Telegram and mark MANUAL_READY for manual platform posting."""
+        from core.telegram_notify import send_post_to_telegram
+
+        notified = send_post_to_telegram(post, post.platform, self._cfg)
+        post.meta = {**post.meta, "delivery": "telegram", "telegram_notified": notified}
+        post.mark(PostStatus.MANUAL_READY)
+        logger.info(
+            "%s post %s queued for manual publishing (Telegram notified=%s)",
+            post.platform,
+            post.id,
+            notified,
+        )
+        return post
 
     def _route_instagram_to_telegram(self, post: Post) -> Post:
         """Send post to Telegram and mark MANUAL_READY for native Instagram publishing."""

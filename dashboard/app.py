@@ -778,6 +778,44 @@ def _get_instagram_mode(_db) -> tuple[bool, str | None]:
         return False, None
 
 
+def _get_platform_telegram_states(_db) -> dict[str, tuple[bool, str | None]]:
+    """Return {platform: (is_telegram_mode, since_str)} for Facebook/Twitter/LinkedIn.
+
+    Reads the most recent completed telegram_mode|{platform}|on/off command.
+    Default (no command) = direct publish mode.
+    """
+    result: dict[str, tuple[bool, str | None]] = {}
+    for platform in ("facebook", "twitter", "linkedin"):
+        try:
+            rows = (
+                _db.table("pipeline_commands")
+                .select("command,status,requested_at")
+                .like("command", f"telegram_mode|{platform}|%")
+                .eq("status", "done")
+                .order("requested_at", desc=True)
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            if not rows:
+                result[platform] = (False, None)
+                continue
+            row = rows[0]
+            is_telegram = row["command"].endswith("|on")
+            since = None
+            if is_telegram and row.get("requested_at"):
+                try:
+                    dt = datetime.fromisoformat(str(row["requested_at"]).replace("Z", "+00:00"))
+                    since = dt.strftime("%-d %b %H:%M UTC")
+                except Exception:
+                    pass
+            result[platform] = (is_telegram, since)
+        except Exception:
+            result[platform] = (False, None)
+    return result
+
+
 _SELECTIVE_PLATFORMS = ["instagram", "facebook", "twitter", "linkedin", "youtube", "tiktok"]
 
 
@@ -1352,6 +1390,77 @@ def _render_pipeline_controls(scope: str) -> None:
                     pass
                 except Exception:
                     st.error("Failed to queue mode switch.")
+
+    # ── Platform Modes — collapsed ────────────────────────────────────────────
+    with st.expander("📡  Platform Modes", expanded=False):
+        st.markdown(
+            "<div style='font-size:11px;color:#6E6E73;margin-bottom:10px'>"
+            "Switch any platform between direct API publishing and Telegram "
+            "delivery (you post manually). Only posts <em>created after</em> the "
+            "switch are affected.</div>",
+            unsafe_allow_html=True,
+        )
+        _ptm_states = _get_platform_telegram_states(db)
+        _ptm_labels = {
+            "facebook": ("🟦", "Facebook"),
+            "twitter": ("🐦", "X / Twitter"),
+            "linkedin": ("💼", "LinkedIn"),
+        }
+        for _ptm_plat, (_ptm_icon, _ptm_label) in _ptm_labels.items():
+            _ptm_is_tg, _ptm_since = _ptm_states.get(_ptm_plat, (False, None))
+            st.markdown(
+                f"<div style='font-size:12px;font-weight:600;color:#1D1D1F;"
+                f"margin-top:6px'>{_ptm_icon} {_ptm_label}</div>",
+                unsafe_allow_html=True,
+            )
+            if _ptm_is_tg:
+                st.markdown(
+                    "<div style='background:#FFF8E1;border:1px solid #FFD54F;"
+                    "border-radius:8px;padding:4px 10px;font-size:11px;font-weight:600;"
+                    f"color:#7B5800;margin-bottom:4px'>📱 Telegram mode"
+                    f"{f' · since {_ptm_since}' if _ptm_since else ''}</div>",
+                    unsafe_allow_html=True,
+                )
+                if st.button(
+                    "📡 Switch to Direct",
+                    key=f"{scope}_ptm_direct_{_ptm_plat}",
+                    use_container_width=True,
+                ):
+                    try:
+                        _queue_command(
+                            f"telegram_mode|{_ptm_plat}|off",
+                            cooldown_key=f"ptm_{_ptm_plat}",
+                        )
+                        st.success(f"{_ptm_label} switching to direct publishing.")
+                    except RuntimeError:
+                        pass
+                    except Exception:
+                        st.error("Failed to queue mode switch.")
+            else:
+                st.markdown(
+                    "<div style='background:#E8F5E9;border:1px solid #A5D6A7;"
+                    "border-radius:8px;padding:4px 10px;font-size:11px;font-weight:600;"
+                    "color:#2E7D32;margin-bottom:4px'>📡 Direct publishing</div>",
+                    unsafe_allow_html=True,
+                )
+                if st.button(
+                    "📱 Switch to Telegram",
+                    key=f"{scope}_ptm_tg_{_ptm_plat}",
+                    use_container_width=True,
+                ):
+                    try:
+                        _queue_command(
+                            f"telegram_mode|{_ptm_plat}|on",
+                            cooldown_key=f"ptm_{_ptm_plat}",
+                        )
+                        st.info(
+                            f"{_ptm_label} switching to Telegram mode — "
+                            "future posts will be sent to Telegram."
+                        )
+                    except RuntimeError:
+                        pass
+                    except Exception:
+                        st.error("Failed to queue mode switch.")
 
     # ── Maintenance — collapsed ───────────────────────────────────────────────
     with st.expander("🔧  Maintenance", expanded=False):
@@ -2883,9 +2992,11 @@ body { background:#F5F5F7; color:#1D1D1F; padding:20px; font-size:13px; }
   </div>
   <div class="sep"><div class="sep-line" style="height:80px"></div></div>
   <div class="node live" style="max-width:220px">
-    <div class="tag">All other platforms</div>
+    <div class="tag">Facebook · X · LinkedIn</div>
     <div class="label">Live on Platform</div>
-    <div class="sub">Direct API publish. Status → <b style="color:#1D7A34">published</b>. Appears in the Published tab.</div>
+    <div class="sub">Direct API publish by default. Status → <b style="color:#1D7A34">published</b>.
+    <br><br>
+    <span style="color:#6E6E73;font-size:10px">Telegram mode available in Platform Modes panel (sidebar) to route to Telegram instead.</span></div>
   </div>
 </div>
 
@@ -2915,7 +3026,7 @@ body { background:#F5F5F7; color:#1D1D1F; padding:20px; font-size:13px; }
 
 </body></html>"""
 
-    components.html(FLOW_HTML, height=1380, scrolling=True)
+    components.html(FLOW_HTML, height=1800, scrolling=False)
 
 # ── Failed alert ──────────────────────────────────────────────────────────────
 

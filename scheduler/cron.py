@@ -1304,6 +1304,18 @@ def run_pending_commands() -> None:
             elif command.startswith("resume_platform|"):
                 _plat = command.split("|", 1)[1]
                 result_msg = run_resume_platform(_plat)
+            elif command.startswith("telegram_mode|"):
+                parts = command.split("|")
+                if len(parts) == 3 and parts[1] in _TELEGRAM_MODE_PLATFORMS:
+                    plat_arg, action = parts[1], parts[2]
+                    if action == "on":
+                        result_msg = run_enable_platform_telegram(plat_arg)
+                    elif action == "off":
+                        result_msg = run_disable_platform_telegram(plat_arg)
+                    else:
+                        result_msg = f"unknown telegram_mode action: {action}"
+                else:
+                    result_msg = f"invalid telegram_mode command: {command}"
             elif command == "publish":
                 # Manual publish always runs — pause only stops scheduled jobs,
                 # not explicit user actions from the dashboard.
@@ -1488,6 +1500,8 @@ def run_cleanup_commands() -> None:
 _AUTOMATION_FLAG_PATH = "config/automation.paused"
 _CONTENT_GEN_FLAG_PATH = "config/content_generation.paused"
 _PLATFORM_PAUSE_PREFIX = "config/platform_paused."
+_PLATFORM_TELEGRAM_PREFIX = "config/telegram_mode."
+_TELEGRAM_MODE_PLATFORMS = ("facebook", "twitter", "linkedin")
 
 
 def _is_automation_paused() -> bool:
@@ -1687,6 +1701,35 @@ def run_instagram_telegram_mode() -> str:
         logger.exception("Could not delete instagram api_mode flag")
         return f"instagram telegram mode flag delete failed: {type(exc).__name__}: {exc}"[:300]
     return "instagram telegram mode restored — posts will be sent to Telegram for manual posting"
+
+
+def run_enable_platform_telegram(platform: str) -> str:
+    """Enable Telegram-delivery mode for *platform* (posts created from now → Telegram)."""
+    from core.storage import get_storage
+
+    logger.warning("=== %s switching to Telegram delivery mode ===", platform.upper())
+    path = f"{_PLATFORM_TELEGRAM_PREFIX}{platform}"
+    ts = datetime.now(UTC).isoformat()
+    try:
+        get_storage().upload(path, ts.encode(), content_type="text/plain")
+    except Exception as exc:
+        logger.exception("Could not write telegram_mode flag for %s", platform)
+        return f"telegram mode flag write failed for {platform}: {type(exc).__name__}: {exc}"[:300]
+    return f"{platform} telegram mode enabled — future posts will be sent to Telegram"
+
+
+def run_disable_platform_telegram(platform: str) -> str:
+    """Disable Telegram-delivery mode for *platform* (revert to direct API publishing)."""
+    from core.storage import get_storage
+
+    logger.warning("=== %s switching back to direct publishing ===", platform.upper())
+    path = f"{_PLATFORM_TELEGRAM_PREFIX}{platform}"
+    try:
+        get_storage().delete(path)
+    except Exception as exc:
+        logger.exception("Could not delete telegram_mode flag for %s", platform)
+        return f"telegram mode flag delete failed for {platform}: {type(exc).__name__}: {exc}"[:300]
+    return f"{platform} telegram mode disabled — posts will publish directly"
 
 
 def run_infographic_pipeline(
