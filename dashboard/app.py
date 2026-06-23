@@ -625,6 +625,24 @@ def load_last_command_status(_db, command: str, prefix: bool = False):
         return None
 
 
+def _cmd_is_recent(row: dict | None, max_minutes: int = 10) -> bool:
+    """True if *row*'s ``requested_at`` is within *max_minutes* of now."""
+    if not row:
+        return False
+    try:
+        ts = row.get("requested_at", "")
+        if not ts:
+            return False
+        dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            from datetime import timezone
+
+            dt = dt.replace(tzinfo=timezone.utc)
+        return (datetime.now(UTC) - dt).total_seconds() < max_minutes * 60
+    except Exception:
+        return False
+
+
 _WORKER_STALE_MINUTES = 6  # worker polls every 2 min; >6 min = three missed cycles
 
 
@@ -1153,15 +1171,16 @@ def _render_pipeline_controls(scope: str) -> None:
             _im = _infog_last.get("error") or ""
             if _is in ("pending", "running"):
                 st.caption("📊 Infographic generating…")
-            elif _im and "spending limit" in _im.lower():
-                st.warning(
-                    "⚠️ Anthropic API spending limit reached. "
-                    "Raise your cap at console.anthropic.com to resume."
-                )
-            elif _is == "done" and _im:
-                st.caption(f"📊 {_im}")
-            elif _im:
-                st.caption(f"📊 Failed: {_im}")
+            elif _cmd_is_recent(_infog_last):
+                if _im and "spending limit" in _im.lower():
+                    st.warning(
+                        "⚠️ Anthropic API spending limit reached. "
+                        "Raise your cap at console.anthropic.com to resume."
+                    )
+                elif _is == "done" and _im:
+                    st.caption(f"📊 {_im}")
+                elif _im:
+                    st.caption(f"📊 Failed: {_im}")
 
         st.markdown(
             f"<div style='border-top:1px solid {SMOKE};margin:10px 0 8px'></div>",
@@ -1195,10 +1214,11 @@ def _render_pipeline_controls(scope: str) -> None:
             _nm = _news_last.get("error") or ""
             if _ns in ("pending", "running"):
                 st.caption("📰 AI news carousel generating…")
-            elif _ns == "done" and _nm:
-                st.caption(f"📰 {_nm}")
-            elif _nm:
-                st.caption(f"📰 Failed: {_nm}")
+            elif _cmd_is_recent(_news_last):
+                if _ns == "done" and _nm:
+                    st.caption(f"📰 {_nm}")
+                elif _nm:
+                    st.caption(f"📰 Failed: {_nm}")
         if st.button(
             "🖼️  Regenerate news background",
             use_container_width=True,
@@ -1223,10 +1243,11 @@ def _render_pipeline_controls(scope: str) -> None:
             _rm = _regen_last.get("error") or ""
             if _rs in ("pending", "running"):
                 st.caption("🖼️ Background reset running…")
-            elif _rs == "done" and _rm:
-                st.caption(f"🖼️ {_rm}")
-            elif _rm:
-                st.caption(f"🖼️ Failed: {_rm}")
+            elif _cmd_is_recent(_regen_last):
+                if _rs == "done" and _rm:
+                    st.caption(f"🖼️ {_rm}")
+                elif _rm:
+                    st.caption(f"🖼️ Failed: {_rm}")
 
     # ── Run Pipeline — collapsed ──────────────────────────────────────────────
     with st.expander("⚙️  Run Pipeline", expanded=False):
@@ -2217,6 +2238,21 @@ with tab_generated:
                                         st.cache_data.clear()
                                     except RuntimeError:
                                         st.warning("Already scheduling this post.")
+                            if st.button(
+                                "✅ Mark as Posted",
+                                key=f"gen_markposted_{pid}",
+                                use_container_width=True,
+                                help="Already posted this manually? Mark it as published.",
+                            ):
+                                db.table("posts").update(
+                                    {
+                                        "status": "published",
+                                        "published_time": datetime.now(UTC).isoformat(),
+                                        "platform_post_id": "manual",
+                                    }
+                                ).eq("id", pid).execute()
+                                st.session_state["_gen_hidden"].add(pid)
+                                st.cache_data.clear()
                         if st.button(
                             "Dismiss",
                             key=f"gen_dismiss_{pid}",
