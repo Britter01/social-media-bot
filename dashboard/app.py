@@ -434,21 +434,29 @@ components.html(
           (the sidebar already shows those controls on wide screens). */
   let btlRestoring = false;
   setInterval(() => {
-    /* Tab restore */
+    /* Tab restore + save
+       Restores to the saved tab after every Streamlit rerun (which resets
+       to tab 0). Also saves the currently active tab on every stable tick
+       so sessionStorage always reflects where the user actually is — not
+       just the last tab they explicitly clicked. Without this, a stale
+       saved value (e.g. Calendar) would override the user's current tab
+       every time a sidebar button triggered a rerun. */
     if (!btlRestoring) {
       const list = doc.querySelector('.stTabs [data-baseweb="tab-list"]');
       if (list) {
         const want = ss.getItem(TK);
         const idx  = want !== null ? parseInt(want, 10) : NaN;
-        if (!isNaN(idx)) {
-          const tabs = list.querySelectorAll('[data-baseweb="tab"]');
-          const cur  = list.querySelector('[aria-selected="true"]');
-          const ci   = Array.prototype.indexOf.call(tabs, cur);
-          if (ci !== idx && idx < tabs.length) {
-            btlRestoring = true;
-            tabs[idx].click();
-            setTimeout(() => { btlRestoring = false; }, 500);
-          }
+        const tabs = list.querySelectorAll('[data-baseweb="tab"]');
+        const cur  = list.querySelector('[aria-selected="true"]');
+        const ci   = Array.prototype.indexOf.call(tabs, cur);
+        if (!isNaN(idx) && ci !== idx && idx < tabs.length) {
+          /* Mismatch — Streamlit just reset the tab; restore the saved one */
+          btlRestoring = true;
+          tabs[idx].click();
+          setTimeout(() => { btlRestoring = false; }, 500);
+        } else if (ci >= 0) {
+          /* Stable — keep sessionStorage in sync with the actual active tab */
+          ss.setItem(TK, String(ci));
         }
       }
     }
