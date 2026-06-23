@@ -1339,23 +1339,35 @@ def _render_pipeline_controls(scope: str) -> None:
             except Exception:
                 st.error("Failed to queue commands.")
 
-    # ── Instagram — collapsed ─────────────────────────────────────────────────
-    with st.expander("📱  Instagram", expanded=False):
+    # ── Platform Modes — collapsed ────────────────────────────────────────────
+    with st.expander("📡  Platform Modes", expanded=False):
+        st.markdown(
+            "<div style='font-size:11px;color:#6E6E73;margin-bottom:10px'>"
+            "Switch any platform between Telegram delivery (you post manually) "
+            "and direct API publishing. Only posts <em>created after</em> the "
+            "switch are affected.</div>",
+            unsafe_allow_html=True,
+        )
+        # ── Instagram ──
         _ig_api_mode, _ig_since = _get_instagram_mode(db)
+        st.markdown(
+            "<div style='font-size:12px;font-weight:600;color:#1D1D1F;"
+            "margin-top:6px'>📷 Instagram</div>",
+            unsafe_allow_html=True,
+        )
         if _ig_api_mode:
             st.markdown(
-                "<div style='background:#E8F0FA;border:1px solid #0066CC;border-radius:12px;"
-                "padding:8px 12px;margin-bottom:8px;font-size:12px;font-weight:600;"
-                f"color:#003D7A'>📡 API mode"
-                f"{f' since {_ig_since}' if _ig_since else ''}</div>",
+                "<div style='background:#E8F0FA;border:1px solid #0066CC;"
+                "border-radius:8px;padding:4px 10px;font-size:11px;font-weight:600;"
+                f"color:#003D7A;margin-bottom:4px'>📡 API mode"
+                f"{f' · since {_ig_since}' if _ig_since else ''}</div>",
                 unsafe_allow_html=True,
             )
             if st.button(
-                "📱  Back to Telegram",
-                use_container_width=True,
-                type="primary",
+                "📱 Switch to Telegram",
                 key=f"{scope}_ig_telegram",
-                help="Route Instagram posts to Telegram again for manual native posting.",
+                use_container_width=True,
+                help="Route Instagram posts to Telegram for manual native posting.",
             ):
                 try:
                     _queue_command("instagram_telegram_mode", cooldown_key="instagram_mode")
@@ -1366,15 +1378,15 @@ def _render_pipeline_controls(scope: str) -> None:
                     st.error("Failed to queue mode switch.")
         else:
             st.markdown(
-                "<div style='background:#E8F5E9;border:1px solid #A5D6A7;border-radius:12px;"
-                "padding:8px 12px;margin-bottom:8px;font-size:12px;font-weight:600;"
-                "color:#2E7D32'>📱 Telegram mode (manual posting)</div>",
+                "<div style='background:#E8F5E9;border:1px solid #A5D6A7;"
+                "border-radius:8px;padding:4px 10px;font-size:11px;font-weight:600;"
+                "color:#2E7D32;margin-bottom:4px'>📱 Telegram mode (default)</div>",
                 unsafe_allow_html=True,
             )
             if st.button(
-                "📡  Switch to API publishing",
-                use_container_width=True,
+                "📡 Switch to API",
                 key=f"{scope}_ig_api",
+                use_container_width=True,
                 help=(
                     "Publish Instagram posts automatically via the Graph API. "
                     "Use when you can't check Telegram. "
@@ -1390,16 +1402,7 @@ def _render_pipeline_controls(scope: str) -> None:
                     pass
                 except Exception:
                     st.error("Failed to queue mode switch.")
-
-    # ── Platform Modes — collapsed ────────────────────────────────────────────
-    with st.expander("📡  Platform Modes", expanded=False):
-        st.markdown(
-            "<div style='font-size:11px;color:#6E6E73;margin-bottom:10px'>"
-            "Switch any platform between direct API publishing and Telegram "
-            "delivery (you post manually). Only posts <em>created after</em> the "
-            "switch are affected.</div>",
-            unsafe_allow_html=True,
-        )
+        # ── Facebook / X / LinkedIn ──
         _ptm_states = _get_platform_telegram_states(db)
         _ptm_labels = {
             "facebook": ("🟦", "Facebook"),
@@ -1415,9 +1418,9 @@ def _render_pipeline_controls(scope: str) -> None:
             )
             if _ptm_is_tg:
                 st.markdown(
-                    "<div style='background:#FFF8E1;border:1px solid #FFD54F;"
+                    "<div style='background:#E8F5E9;border:1px solid #A5D6A7;"
                     "border-radius:8px;padding:4px 10px;font-size:11px;font-weight:600;"
-                    f"color:#7B5800;margin-bottom:4px'>📱 Telegram mode"
+                    f"color:#2E7D32;margin-bottom:4px'>📱 Telegram mode"
                     f"{f' · since {_ptm_since}' if _ptm_since else ''}</div>",
                     unsafe_allow_html=True,
                 )
@@ -1438,9 +1441,9 @@ def _render_pipeline_controls(scope: str) -> None:
                         st.error("Failed to queue mode switch.")
             else:
                 st.markdown(
-                    "<div style='background:#E8F5E9;border:1px solid #A5D6A7;"
+                    "<div style='background:#F5F5F7;border:1px solid #E8E8ED;"
                     "border-radius:8px;padding:4px 10px;font-size:11px;font-weight:600;"
-                    "color:#2E7D32;margin-bottom:4px'>📡 Direct publishing</div>",
+                    "color:#6E6E73;margin-bottom:4px'>📡 Direct publishing (default)</div>",
                     unsafe_allow_html=True,
                 )
                 if st.button(
@@ -2988,7 +2991,7 @@ body { background:#F5F5F7; color:#1D1D1F; padding:20px; font-size:13px; }
     <div class="label">Telegram Notification</div>
     <div class="sub">Post image is sent to your Telegram. <b style="color:#B25E09">You save and post natively in the Instagram app</b> — full organic reach, no API suppression.
     <br><br>
-    <span style="color:#6E6E73;font-size:10px">API mode available in the Instagram panel (sidebar) when you need the bot to publish directly.</span></div>
+    <span style="color:#6E6E73;font-size:10px">Switch to API mode in Platform Modes (sidebar) when you need the bot to publish directly.</span></div>
   </div>
   <div class="sep"><div class="sep-line" style="height:80px"></div></div>
   <div class="node live" style="max-width:220px">
@@ -3026,7 +3029,7 @@ body { background:#F5F5F7; color:#1D1D1F; padding:20px; font-size:13px; }
 
 </body></html>"""
 
-    components.html(FLOW_HTML, height=1800, scrolling=False)
+    components.html(FLOW_HTML, height=1500, scrolling=False)
 
 # ── Failed alert ──────────────────────────────────────────────────────────────
 
