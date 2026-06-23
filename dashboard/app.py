@@ -924,8 +924,8 @@ def _render_pipeline_controls(scope: str) -> None:
     _auto_paused, _auto_since = _get_automation_state(db)
     if _auto_paused:
         st.markdown(
-            f"<div style='background:#FFF3CD;border:1px solid #F0AD4E;border-radius:12px;"
-            f"padding:10px 14px;margin-bottom:8px;font-size:13px;font-weight:600;"
+            f"<div style='background:#FFF3CD;border:1px solid #F0AD4E;border-radius:10px;"
+            f"padding:8px 12px;margin-bottom:8px;font-size:12px;font-weight:600;"
             f"color:#7B4F00'>⚠️ AUTOMATION PAUSED"
             f"{f' since {_auto_since}' if _auto_since else ''}</div>",
             unsafe_allow_html=True,
@@ -1352,14 +1352,14 @@ def _render_pipeline_controls(scope: str) -> None:
         _ig_api_mode, _ig_since = _get_instagram_mode(db)
         st.markdown(
             "<div style='font-size:12px;font-weight:600;color:#1D1D1F;"
-            "margin-top:6px'>📷 Instagram</div>",
+            "margin-top:2px'>📷 Instagram</div>",
             unsafe_allow_html=True,
         )
         if _ig_api_mode:
             st.markdown(
                 "<div style='background:#E8F0FA;border:1px solid #0066CC;"
-                "border-radius:8px;padding:4px 10px;font-size:11px;font-weight:600;"
-                f"color:#003D7A;margin-bottom:4px'>📡 API mode"
+                "border-radius:10px;padding:8px 12px;font-size:12px;font-weight:600;"
+                f"color:#003D7A;margin-bottom:6px'>📡 API mode"
                 f"{f' · since {_ig_since}' if _ig_since else ''}</div>",
                 unsafe_allow_html=True,
             )
@@ -1379,8 +1379,8 @@ def _render_pipeline_controls(scope: str) -> None:
         else:
             st.markdown(
                 "<div style='background:#E8F5E9;border:1px solid #A5D6A7;"
-                "border-radius:8px;padding:4px 10px;font-size:11px;font-weight:600;"
-                "color:#2E7D32;margin-bottom:4px'>📱 Telegram mode (default)</div>",
+                "border-radius:10px;padding:8px 12px;font-size:12px;font-weight:600;"
+                "color:#2E7D32;margin-bottom:6px'>📱 Telegram mode (default)</div>",
                 unsafe_allow_html=True,
             )
             if st.button(
@@ -1419,8 +1419,8 @@ def _render_pipeline_controls(scope: str) -> None:
             if _ptm_is_tg:
                 st.markdown(
                     "<div style='background:#E8F5E9;border:1px solid #A5D6A7;"
-                    "border-radius:8px;padding:4px 10px;font-size:11px;font-weight:600;"
-                    f"color:#2E7D32;margin-bottom:4px'>📱 Telegram mode"
+                    "border-radius:10px;padding:8px 12px;font-size:12px;font-weight:600;"
+                    f"color:#2E7D32;margin-bottom:6px'>📱 Telegram mode"
                     f"{f' · since {_ptm_since}' if _ptm_since else ''}</div>",
                     unsafe_allow_html=True,
                 )
@@ -1442,8 +1442,8 @@ def _render_pipeline_controls(scope: str) -> None:
             else:
                 st.markdown(
                     "<div style='background:#F5F5F7;border:1px solid #E8E8ED;"
-                    "border-radius:8px;padding:4px 10px;font-size:11px;font-weight:600;"
-                    "color:#6E6E73;margin-bottom:4px'>📡 Direct publishing (default)</div>",
+                    "border-radius:10px;padding:8px 12px;font-size:12px;font-weight:600;"
+                    "color:#6E6E73;margin-bottom:6px'>📡 Direct publishing (default)</div>",
                     unsafe_allow_html=True,
                 )
                 if st.button(
@@ -1703,7 +1703,7 @@ if _banner_paused:
 
 # ── Pipeline controls (main body — always reachable, incl. mobile) ──────────────
 
-with st.expander("⚙  Pipeline controls — run the bot manually", expanded=False):
+with st.expander("⚙️  Pipeline controls — run the bot manually", expanded=False):
     _render_pipeline_controls("main")
 
 # ── Pipeline status bar ───────────────────────────────────────────────────────
@@ -1915,7 +1915,7 @@ def _post_card(
 
     # Expandable caption / slides
     if is_carousel and slides:
-        with st.expander(f"View {len(slides)} slides"):
+        with st.expander(f"🖼️  View {len(slides)} slides"):
             for j, slide in enumerate(slides):
                 role = slide.get("role", "")
                 tag = " (cover)" if role == "cover" else " (CTA)" if role == "cta" else ""
@@ -2068,7 +2068,7 @@ with tab_topics:
                         st.rerun()
 
                 # Edit platform / pillar inline
-                with st.expander("Edit before approving"):
+                with st.expander("✏️  Edit before approving"):
                     ef1, ef2, ef3 = st.columns([2, 2, 1])
                     with ef1:
                         new_platform = st.selectbox(
@@ -2181,7 +2181,7 @@ with tab_scheduled:
                     with st.container(border=True):
                         _post_card(p, _sched_str(p), "scheduled")
                         pid = p.get("id", "")
-                        with st.expander("✏️ Edit caption"):
+                        with st.expander("✏️  Edit caption"):
                             cur_caption = p.get("caption") or ""
                             new_cap = st.text_area(
                                 "Caption",
@@ -2696,7 +2696,7 @@ with tab_analytics:
 """
         )
         st.code(_ANALYTICS_TABLE_SQL, language="sql")
-        with st.expander("Error detail"):
+        with st.expander("⚠️  Error detail"):
             st.caption(analytics_error)
         _render_analytics_fetch_button()
     elif not analytics_rows:
