@@ -625,6 +625,78 @@ def load_last_command_status(_db, command: str, prefix: bool = False):
         return None
 
 
+_WORKER_STALE_MINUTES = 6  # worker polls every 2 min; >6 min = three missed cycles
+
+
+def _get_worker_health(_db) -> dict:
+    """Assess whether the scheduler worker is actually processing commands.
+
+    Reads only the ``pipeline_commands`` table, so it works even when the
+    worker is completely down (the dashboard is a separate Railway service).
+    A worker that's alive marks pending commands ``running``/``done`` within a
+    couple of minutes; commands left ``pending`` past ``_WORKER_STALE_MINUTES``
+    mean the worker isn't running, is crash-looping, or is deployed from a
+    branch without the command-queue code.
+
+    Returns a dict: ``stuck_pending`` (count), ``oldest_pending_min`` (float|None),
+    ``last_activity`` (str|None — last proof of life), ``healthy`` (bool).
+    """
+    info = {
+        "stuck_pending": 0,
+        "oldest_pending_min": None,
+        "last_activity": None,
+        "healthy": True,
+    }
+    try:
+        now = datetime.now(UTC)
+        pend = (
+            _db.table("pipeline_commands")
+            .select("requested_at")
+            .eq("status", "pending")
+            .order("requested_at", desc=False)
+            .limit(100)
+            .execute()
+            .data
+            or []
+        )
+        ages: list[float] = []
+        for r in pend:
+            raw = r.get("requested_at") or ""
+            try:
+                dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                ages.append((now - dt).total_seconds() / 60.0)
+            except Exception:
+                pass
+        if ages:
+            info["oldest_pending_min"] = max(ages)
+            info["stuck_pending"] = sum(1 for a in ages if a >= _WORKER_STALE_MINUTES)
+
+        # Last proof of life: most recent command the worker finished (done or failed).
+        done = (
+            _db.table("pipeline_commands")
+            .select("finished_at")
+            .in_("status", ["done", "failed"])
+            .order("finished_at", desc=True)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if done:
+            raw = done[0].get("finished_at") or ""
+            try:
+                dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                info["last_activity"] = dt.strftime("%d %b %Y · %H:%M UTC")
+            except Exception:
+                info["last_activity"] = raw or None
+
+        info["healthy"] = info["stuck_pending"] == 0
+    except Exception:
+        # Fail-open: never show a scary (possibly wrong) banner on a read error.
+        pass
+    return info
+
+
 def _get_automation_state(_db) -> tuple[bool, str | None]:
     """Return (is_paused, since_str).
 
@@ -1445,6 +1517,35 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
+# ── Worker health banner (worker down = nothing publishes or generates) ─────────
+
+_wh = _get_worker_health(db)
+if not _wh["healthy"]:
+    _age = _wh["oldest_pending_min"]
+    _age_str = f"{int(_age)} min" if _age is not None else "several minutes"
+    _last = _wh["last_activity"]
+    _n = _wh["stuck_pending"]
+    st.markdown(
+        f"""
+<div style="background:#FFF0F0;border:2px solid #CC0000;border-radius:16px;
+            padding:18px 24px;margin-bottom:12px">
+  <div style="font-family:'Figtree',sans-serif;font-size:16px;font-weight:700;
+              color:#CC0000">🔌 Worker not responding</div>
+  <div style="font-size:13px;color:#8A0000;margin-top:6px;line-height:1.6">
+    {_n} command(s) have been waiting {_age_str} with no response. The scheduler
+    worker processes every command and scheduled post — while it's down, nothing
+    publishes or generates, and buttons appear to do nothing.<br>
+    {f"Last worker activity: {_last}." if _last else "No record of the worker ever running."}
+    <br><br>
+    <b>Fix:</b> In Railway, open the <b>worker</b> service and check it's running
+    (not crashed) and deployed from branch
+    <code>claude/automations-not-running-DGjgD</code>. Redeploy if needed.
+  </div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
 
 # ── Automation pause banner (shown prominently in main content when paused) ──────
 
