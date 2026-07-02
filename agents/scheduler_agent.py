@@ -103,6 +103,11 @@ class SchedulerAgent:
         # ±15 min jitter — avoids robotic on-the-clock timestamps that are
         # a detectable bot signature on Instagram and other platforms.
         best = best + timedelta(minutes=random.randint(-15, 15))
+        # Negative jitter must not break the "strictly after" contract — a
+        # result at or before ``after`` would collide with (or precede) the
+        # previously scheduled post on the same platform.
+        if best <= reference:
+            best = reference + timedelta(minutes=random.randint(1, 15))
 
         logger.debug("Next %s slot after %s -> %s", platform, reference, best)
         return best

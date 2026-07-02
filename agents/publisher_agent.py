@@ -161,7 +161,11 @@ class PublisherAgent:
 
         try:
             post_id = handler(post)
-        except (httpx.HTTPError, PublishError) as exc:
+        except Exception as exc:
+            # Broad catch on purpose: Twitter raises requests.RequestException,
+            # YouTube raises googleapiclient errors — an uncaught type would skip
+            # the FAILED transition and leave the post stuck in 'publishing',
+            # retrying forever with no surfaced error.
             # Include the actual API response body so the error shown in the
             # dashboard contains the platform's own error code/message.
             if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
@@ -378,20 +382,36 @@ class PublisherAgent:
 
     @staticmethod
     def _get_platform_telegram_since(platform: str) -> datetime | None:
-        """Return enablement datetime for Telegram mode on *platform*, or None."""
-        try:
-            from core.storage import get_storage
+        """Return enablement datetime for Telegram mode on *platform*, or None.
 
-            data = get_storage().download(f"config/telegram_mode.{platform}")
-            if data is None:
-                return None
-            ts = data.decode().strip()
-            dt = datetime.fromisoformat(ts)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=UTC)
-            return dt
+        Fail-safe: if Storage can't be read (transient outage) or the flag body
+        is unparseable, assume Telegram mode is ON rather than risk publishing
+        via the API against the user's preference. A manual Telegram delivery
+        is always recoverable; an unwanted API post is not.
+        """
+        from core.storage import get_storage
+
+        try:
+            storage = get_storage()
         except Exception:
+            # Storage isn't configured at all (dev/tests) — no flag can exist.
             return None
+        try:
+            data = storage.download(f"config/telegram_mode.{platform}")
+        except Exception:
+            logger.exception(
+                "Could not read telegram_mode flag for %s — failing safe to Telegram delivery",
+                platform,
+            )
+            return datetime.fromtimestamp(0, tz=UTC)
+        if data is None:
+            return None
+        try:
+            dt = datetime.fromisoformat(data.decode().strip())
+            return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+        except Exception:
+            # Flag exists but body is unparseable — presence alone means ON.
+            return datetime.fromtimestamp(0, tz=UTC)
 
     def _route_to_telegram(self, post: Post) -> Post:
         """Send post to Telegram and mark MANUAL_READY for manual platform posting."""
@@ -399,6 +419,18 @@ class PublisherAgent:
 
         notified = send_post_to_telegram(post, post.platform, self._cfg)
         post.meta = {**post.meta, "delivery": "telegram", "telegram_notified": notified}
+        if not notified:
+            # Don't mark MANUAL_READY on a failed send — the user never received
+            # the message, so the post would silently vanish from the queue in a
+            # success state. Failed keeps it visible with a Retry button.
+            post.mark(
+                PostStatus.FAILED,
+                error=(
+                    f"Telegram delivery failed for {post.platform} — "
+                    "check TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID, then Retry"
+                ),
+            )
+            return post
         post.mark(PostStatus.MANUAL_READY)
         logger.info(
             "%s post %s queued for manual publishing (Telegram notified=%s)",
@@ -414,6 +446,15 @@ class PublisherAgent:
 
         notified = send_instagram_post(post, self._cfg)
         post.meta = {**post.meta, "delivery": "telegram", "telegram_notified": notified}
+        if not notified:
+            post.mark(
+                PostStatus.FAILED,
+                error=(
+                    "Telegram delivery failed for instagram — "
+                    "check TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID, then Retry"
+                ),
+            )
+            return post
         post.mark(PostStatus.MANUAL_READY)
         logger.info(
             "Instagram post %s queued for manual publishing (Telegram notified=%s)",

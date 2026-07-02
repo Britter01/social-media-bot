@@ -723,10 +723,10 @@ def _get_automation_state(_db) -> tuple[bool, str | None]:
     try:
         result = (
             _db.table("pipeline_commands")
-            .select("command, finished_at")
+            .select("command, requested_at, finished_at")
             .in_("command", ["pause_automation", "resume_automation"])
-            .eq("status", "done")
-            .order("finished_at", desc=True)
+            .not_.eq("status", "failed")
+            .order("requested_at", desc=True)
             .limit(1)
             .execute()
         )
@@ -735,7 +735,8 @@ def _get_automation_state(_db) -> tuple[bool, str | None]:
             return False, None
         row = rows[0]
         paused = row["command"] == "pause_automation"
-        raw_ts = row.get("finished_at") or ""
+        # finished_at for done commands, requested_at for pending/running ones
+        raw_ts = row.get("finished_at") or row.get("requested_at") or ""
         try:
             dt = datetime.fromisoformat(raw_ts.replace("Z", "+00:00"))
             since = dt.strftime("%d %b %Y · %H:%M UTC")
@@ -755,10 +756,10 @@ def _get_instagram_mode(_db) -> tuple[bool, str | None]:
     try:
         result = (
             _db.table("pipeline_commands")
-            .select("command, finished_at")
+            .select("command, requested_at, finished_at")
             .in_("command", ["instagram_api_mode", "instagram_telegram_mode"])
-            .eq("status", "done")
-            .order("finished_at", desc=True)
+            .not_.eq("status", "failed")
+            .order("requested_at", desc=True)
             .limit(1)
             .execute()
         )
@@ -767,7 +768,8 @@ def _get_instagram_mode(_db) -> tuple[bool, str | None]:
             return False, None
         row = rows[0]
         api_mode = row["command"] == "instagram_api_mode"
-        raw_ts = row.get("finished_at") or ""
+        # finished_at for done commands, requested_at for pending/running ones
+        raw_ts = row.get("finished_at") or row.get("requested_at") or ""
         try:
             dt = datetime.fromisoformat(raw_ts.replace("Z", "+00:00"))
             since = dt.strftime("%d %b %Y · %H:%M UTC")
@@ -791,7 +793,7 @@ def _get_platform_telegram_states(_db) -> dict[str, tuple[bool, str | None]]:
                 _db.table("pipeline_commands")
                 .select("command,status,requested_at")
                 .like("command", f"telegram_mode|{platform}|%")
-                .eq("status", "done")
+                .not_.eq("status", "failed")
                 .order("requested_at", desc=True)
                 .limit(1)
                 .execute()
@@ -891,7 +893,8 @@ def by_status(items, *statuses):
     return [i for i in items if i.get("status") in statuses]
 
 
-pending = by_status(topics, "pending_approval")
+# "selected" is a legacy alias for pending_approval (see core/models.py TopicStatus)
+pending = by_status(topics, "pending_approval", "selected")
 approved_t = by_status(topics, "approved")
 in_progress = by_status(posts, "content_ready", "media_ready")
 scheduled = by_status(posts, "scheduled")
@@ -2223,6 +2226,8 @@ with tab_scheduled:
                                 _queue_command("publish", cooldown_key=f"pub_{pid}")
                             except RuntimeError:
                                 pass
+                            st.cache_data.clear()
+                            st.success("📤 Publishing queued — posted within ~2 minutes.")
                         if pid and st.button(
                             "Dismiss", key=f"dismiss_sched_{pid}", use_container_width=True
                         ):
@@ -2261,7 +2266,11 @@ with tab_generated:
         cols = st.columns(3)
         for i, p in enumerate(gen_sorted):
             with cols[i % 3]:
-                with st.container(border=True):
+                # Each card renders inside an st.empty() slot so button handlers can
+                # replace it with a confirmation immediately, without an st.rerun()
+                # (which would reset the active tab).
+                _card_slot = st.empty()
+                with _card_slot.container(border=True):
                     _post_card(p, "Ready to post", "manual_ready")
                     pid = p.get("id", "")
                     _is_tg_post = (p.get("meta") or {}).get("delivery") == "telegram"
@@ -2312,6 +2321,7 @@ with tab_generated:
                                     ).eq("id", pid).execute()
                                     st.session_state["_gen_hidden"].add(pid)
                                     st.cache_data.clear()
+                                    _card_slot.success("✅ Marked as posted.")
                         else:
                             btn1, btn2 = st.columns(2)
                             with btn1:
@@ -2334,6 +2344,9 @@ with tab_generated:
                                         pass
                                     st.session_state["_gen_hidden"].add(pid)
                                     st.cache_data.clear()
+                                    _card_slot.success(
+                                        "📤 Publishing queued — posted within ~2 minutes."
+                                    )
                             with btn2:
                                 if st.button(
                                     "📅 Schedule",
@@ -2348,6 +2361,7 @@ with tab_generated:
                                         )
                                         st.session_state["_gen_hidden"].add(pid)
                                         st.cache_data.clear()
+                                        _card_slot.success("📅 Added to the schedule queue.")
                                     except RuntimeError:
                                         st.warning("Already scheduling this post.")
                             if st.button(
@@ -2365,6 +2379,7 @@ with tab_generated:
                                 ).eq("id", pid).execute()
                                 st.session_state["_gen_hidden"].add(pid)
                                 st.cache_data.clear()
+                                _card_slot.success("✅ Marked as posted.")
                         if st.button(
                             "Dismiss",
                             key=f"gen_dismiss_{pid}",
@@ -2375,6 +2390,7 @@ with tab_generated:
                             ).execute()
                             st.session_state["_gen_hidden"].add(pid)
                             st.cache_data.clear()
+                            _card_slot.empty()
 
 # ── Calendar ──────────────────────────────────────────────────────────────────
 
@@ -2391,17 +2407,22 @@ with tab_calendar:
                 pass
 
     today = datetime.now(UTC).date()
+    _CAL_MIN_YEAR, _CAL_MAX_YEAR = 2025, 2035
     if "cal_year" not in st.session_state:
         st.session_state.cal_year = today.year
     if "cal_month" not in st.session_state:
         st.session_state.cal_month = today.month
+    # Keep the year inside the selector bounds — an out-of-range value makes the
+    # Year number_input below raise on every rerun.
+    st.session_state.cal_year = max(_CAL_MIN_YEAR, min(_CAL_MAX_YEAR, st.session_state.cal_year))
 
     col_p, col_t, col_n = st.columns([1, 5, 1])
     with col_p:
         if st.button("← Prev", use_container_width=True):
             if st.session_state.cal_month == 1:
-                st.session_state.cal_month = 12
-                st.session_state.cal_year -= 1
+                if st.session_state.cal_year > _CAL_MIN_YEAR:
+                    st.session_state.cal_month = 12
+                    st.session_state.cal_year -= 1
             else:
                 st.session_state.cal_month -= 1
             st.rerun()
@@ -2416,8 +2437,9 @@ with tab_calendar:
     with col_n:
         if st.button("Next →", use_container_width=True):
             if st.session_state.cal_month == 12:
-                st.session_state.cal_month = 1
-                st.session_state.cal_year += 1
+                if st.session_state.cal_year < _CAL_MAX_YEAR:
+                    st.session_state.cal_month = 1
+                    st.session_state.cal_year += 1
             else:
                 st.session_state.cal_month += 1
             st.rerun()
@@ -2496,7 +2518,9 @@ with tab_calendar:
         )
         sel_m = list(calendar.month_name).index(sel_mn)
     with col_y:
-        sel_y = st.number_input("Year", 2026, 2030, year, label_visibility="collapsed")
+        sel_y = st.number_input(
+            "Year", _CAL_MIN_YEAR, _CAL_MAX_YEAR, year, label_visibility="collapsed"
+        )
     try:
         sel_date = date(sel_y, sel_m, int(sel_day))
         day_items = date_posts.get(sel_date, [])
@@ -3046,12 +3070,14 @@ if failed:
                     db.table("posts").update({"status": "scheduled", "error": None}).in_(
                         "id", ids
                     ).execute()
+                    st.cache_data.clear()
                     st.rerun()
         with col_del_all:
             if st.button("Dismiss all", key="delete_all_failed"):
                 ids = [p["id"] for p in failed if p.get("id")]
                 if ids:
                     db.table("posts").update({"status": "dismissed"}).in_("id", ids).execute()
+                    st.cache_data.clear()
                     st.rerun()
 
         for post in failed:
@@ -3077,8 +3103,10 @@ if failed:
                     db.table("posts").update({"status": "scheduled", "error": None}).eq(
                         "id", post_id
                     ).execute()
+                    st.cache_data.clear()
                     st.rerun()
             with col_del:
                 if post_id and st.button("Dismiss", key=f"delete_{post_id}"):
                     db.table("posts").update({"status": "dismissed"}).eq("id", post_id).execute()
+                    st.cache_data.clear()
                     st.rerun()

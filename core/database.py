@@ -22,6 +22,7 @@ Expected table (create once in the Supabase SQL editor):
         error text,
         post_type text not null default 'standard',
         slides jsonb default '[]'::jsonb,
+        meta jsonb default '{}'::jsonb,
         created_at timestamptz not null default now(),
         updated_at timestamptz not null default now()
     );
@@ -31,6 +32,7 @@ Expected table (create once in the Supabase SQL editor):
 -- If upgrading from an older schema that is missing these columns, run:
 --   alter table posts add column if not exists post_type text not null default 'standard';
 --   alter table posts add column if not exists slides jsonb default '[]'::jsonb;
+--   alter table posts add column if not exists meta jsonb default '{}'::jsonb;
 
 And the topics table the research agent writes to:
 

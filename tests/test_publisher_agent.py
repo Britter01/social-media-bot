@@ -41,15 +41,28 @@ def test_unsupported_platform_raises(base_config):
         PublisherAgent(base_config).publish(post)
 
 
-def test_instagram_routes_to_telegram(base_config):
+def test_instagram_routes_to_telegram(base_config, monkeypatch):
     # Instagram is never published via the Graph API — it is always routed to
-    # Telegram for manual native posting. With no Telegram credentials set in
-    # base_config, the notification is silently skipped but the post still
-    # lands in MANUAL_READY (no error raised, no PublishError).
+    # Telegram for manual native posting. When the Telegram send succeeds the
+    # post lands in MANUAL_READY with the delivery metadata set.
+    import core.telegram_notify as tn
+
+    monkeypatch.setattr(tn, "send_instagram_post", lambda post, cfg: True)
     post = Post(pillar="Review", platform="instagram", caption="Hi")
     PublisherAgent(base_config).publish(post)
     assert post.status == PostStatus.MANUAL_READY.value
     assert post.meta.get("delivery") == "telegram"
+
+
+def test_instagram_telegram_failure_marks_failed(base_config):
+    # With no Telegram credentials the send fails — the post must NOT be
+    # marked MANUAL_READY (the user never received it); it goes to FAILED
+    # with an actionable error so the dashboard shows a Retry button.
+    post = Post(pillar="Review", platform="instagram", caption="Hi")
+    PublisherAgent(base_config).publish(post)
+    assert post.status == PostStatus.FAILED.value
+    assert "telegram" in (post.error or "").lower()
+    assert post.meta.get("telegram_notified") is False
 
 
 def test_facebook_requires_thumbnail(base_config):
@@ -104,11 +117,13 @@ class _FakeClient:
         return _FakeResponse({"status_code": "FINISHED"})
 
 
-def test_instagram_publish_routes_to_telegram(base_config):
+def test_instagram_publish_routes_to_telegram(base_config, monkeypatch):
     # Instagram posts with a thumbnail are routed to Telegram (not the Graph
-    # API). With no Telegram credentials in base_config the notification is
-    # silently skipped, but the post lands in MANUAL_READY and carries the
-    # delivery metadata so the dashboard can show the right buttons.
+    # API). The post lands in MANUAL_READY and carries the delivery metadata
+    # so the dashboard can show the right buttons.
+    import core.telegram_notify as tn
+
+    monkeypatch.setattr(tn, "send_instagram_post", lambda post, cfg: True)
     post = Post(
         pillar="Tech Lifestyle",
         platform="instagram",

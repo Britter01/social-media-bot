@@ -716,10 +716,20 @@ def run_publisher(ignore_platform_pause: bool = False) -> None:
         except Exception:
             logger.exception("Publish failed for post %s; continuing", post.id)
         finally:
-            try:
-                db.upsert(post)
-            except Exception:
-                logger.exception("Could not persist post %s after publish", post.id)
+            # Retry the persist: if the platform API call succeeded but this
+            # write is lost, the post is reset to 'scheduled' 15 minutes later
+            # and published a second time.
+            for _attempt in range(3):
+                try:
+                    db.upsert(post)
+                    break
+                except Exception:
+                    if _attempt == 2:
+                        logger.exception("Could not persist post %s after publish", post.id)
+                    else:
+                        import time
+
+                        time.sleep(2 * (_attempt + 1))
 
 
 def run_qc_retry() -> None:
@@ -1257,6 +1267,31 @@ def run_pending_commands() -> None:
         logger.exception("Command queue: could not connect to Supabase")
         return
 
+    # Reap commands stuck in 'running' — a worker restart/redeploy mid-command
+    # leaves the row in 'running' forever (only 'pending' rows are re-selected),
+    # so the dashboard would show it as running and the outcome is lost.
+    try:
+        _stale = (datetime.now(UTC) - timedelta(minutes=60)).isoformat()
+        reaped = (
+            sb.table("pipeline_commands")
+            .update(
+                {
+                    "status": "failed",
+                    "finished_at": datetime.now(UTC).isoformat(),
+                    "error": "worker restarted while this command was running — please retry",
+                }
+            )
+            .eq("status", "running")
+            .lt("started_at", _stale)
+            .execute()
+            .data
+            or []
+        )
+        if reaped:
+            logger.warning("Command queue: reaped %d command(s) stuck in 'running'", len(reaped))
+    except Exception:
+        logger.debug("Command queue: stuck-running reaper failed", exc_info=True)
+
     try:
         rows = (
             sb.table("pipeline_commands")
@@ -1275,11 +1310,23 @@ def run_pending_commands() -> None:
     for row in rows:
         cmd_id = row.get("id")
         command = row.get("command", "")
-        logger.info("Command queue: executing '%s' (id=%s)", command, cmd_id)
 
-        sb.table("pipeline_commands").update(
-            {"status": "running", "started_at": datetime.now(UTC).isoformat()}
-        ).eq("id", cmd_id).execute()
+        # Conditional claim: only proceed if this worker flipped pending→running.
+        # During a rolling deploy two workers can both read the same pending row;
+        # without this guard the command would execute twice.
+        claimed = (
+            sb.table("pipeline_commands")
+            .update({"status": "running", "started_at": datetime.now(UTC).isoformat()})
+            .eq("id", cmd_id)
+            .eq("status", "pending")
+            .execute()
+            .data
+            or []
+        )
+        if not claimed:
+            logger.info("Command queue: '%s' (id=%s) already claimed; skipping", command, cmd_id)
+            continue
+        logger.info("Command queue: executing '%s' (id=%s)", command, cmd_id)
 
         error: str | None = None
         result_msg: str | None = None
@@ -1323,6 +1370,17 @@ def run_pending_commands() -> None:
             elif command == "all":
                 result_msg = run_image_refresh()
                 run_publisher(ignore_platform_pause=True)
+            elif command == "diagnostics":
+                # Diagnostics must work while paused — that's exactly when the
+                # user needs to see what's wrong.
+                result_msg = run_diagnostics()
+            elif command == "refresh_token":
+                # Token refresh is never blocked by pause (matches the scheduled
+                # token_refresh job) so the 60-day token can't silently lapse.
+                result_msg = run_token_refresh()
+            elif command == "reset_stuck":
+                n = _reset_stuck_publishing(threshold_minutes=0)
+                result_msg = f"reset {n} stuck post(s) from 'publishing' back to 'scheduled'"
             elif _is_automation_paused():
                 # All remaining commands are skipped while automation is paused.
                 result_msg = "automation paused — command skipped"
@@ -1337,10 +1395,6 @@ def run_pending_commands() -> None:
                 run_weekly_strategy()
             elif command == "analytics":
                 result_msg = run_analytics()
-            elif command == "diagnostics":
-                result_msg = run_diagnostics()
-            elif command == "refresh_token":
-                result_msg = run_token_refresh()
             elif command.startswith("create_infographic"):
                 _parts = command.split("|", 1)
                 result_msg = run_infographic_pipeline(
@@ -1352,9 +1406,6 @@ def run_pending_commands() -> None:
                 result_msg = run_regen_news_bg()
             elif command == "cleanup_hashtags":
                 result_msg = run_cleanup_hashtags()
-            elif command == "reset_stuck":
-                n = _reset_stuck_publishing(threshold_minutes=0)
-                result_msg = f"reset {n} stuck post(s) from 'publishing' back to 'scheduled'"
             elif command.startswith("schedule_post|"):
                 result_msg = run_schedule_post(command.split("|", 1)[1])
             else:
@@ -1472,8 +1523,27 @@ def run_cleanup_hashtags() -> str:
     return result
 
 
+# State-bearing commands are never pruned: the dashboard reconstructs the current
+# pause/mode state from the most recent of these rows, so deleting them would make
+# a pause older than 7 days silently disappear from the UI while the worker's
+# Storage flag keeps everything paused.
+_STATE_COMMANDS = [
+    "pause_automation",
+    "resume_automation",
+    "pause_content_gen",
+    "resume_content_gen",
+    "instagram_api_mode",
+    "instagram_telegram_mode",
+]
+_STATE_COMMAND_PREFIXES = ["pause_platform|", "resume_platform|", "telegram_mode|"]
+
+
 def run_cleanup_commands() -> None:
-    """Delete pipeline_commands rows older than 7 days to keep the table small."""
+    """Delete pipeline_commands rows older than 7 days to keep the table small.
+
+    State-bearing commands (pause/resume, platform modes) are kept — see
+    _STATE_COMMANDS above.
+    """
     from supabase import create_client
 
     try:
@@ -1484,12 +1554,16 @@ def run_cleanup_commands() -> None:
 
     try:
         cutoff = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-        from datetime import timedelta
-
         cutoff -= timedelta(days=7)
-        result = (
-            sb.table("pipeline_commands").delete().lt("requested_at", cutoff.isoformat()).execute()
+        query = (
+            sb.table("pipeline_commands")
+            .delete()
+            .lt("requested_at", cutoff.isoformat())
+            .not_.in_("command", _STATE_COMMANDS)
         )
+        for _prefix in _STATE_COMMAND_PREFIXES:
+            query = query.not_.like("command", f"{_prefix}%")
+        result = query.execute()
         deleted = len(result.data) if result.data else 0
         if deleted:
             logger.info("Cleanup: deleted %d old pipeline_commands row(s)", deleted)

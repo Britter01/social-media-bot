@@ -293,10 +293,16 @@ class AnalyticsAgent:
                         err = self._last_error or (self._warnings[-1] if self._warnings else "")
                         self._errors.append(f"views refresh {platform}: {err[:200]}")
                     continue
-                # Patch the existing analytics row with the new view values.
+                # Patch the existing analytics row(s) with the new view values.
+                # A post can hold both a 24h and a 7d snapshot row — only touch
+                # rows whose view columns are still NULL, so a snapshot that
+                # already captured views is never overwritten with values from
+                # a different time window.
                 try:
                     self._client.table(_ANALYTICS_TABLE).update(view_only).eq(
                         "post_id", post_id
+                    ).is_("impressions", "null").is_("reach", "null").is_(
+                        "video_views", "null"
                     ).execute()
                     self._plat_stored[platform] = self._plat_stored.get(platform, 0) + 1
                     self._stored += 1
@@ -840,8 +846,6 @@ class AnalyticsAgent:
         metrics: dict,
     ) -> None:
         """Upsert a post_analytics row."""
-        import json
-
         raw = metrics.pop("raw_data", None)
         row = {
             "post_id": post_id,
@@ -856,7 +860,9 @@ class AnalyticsAgent:
             "shares": metrics.get("shares"),
             "saves": metrics.get("saves"),
             "video_views": metrics.get("video_views"),
-            "raw_data": json.dumps(raw) if raw is not None else None,
+            # Pass the dict through as-is — json.dumps here would store a JSON
+            # *string* scalar in the jsonb column, making it unqueryable.
+            "raw_data": raw,
         }
         try:
             self._client.table(_ANALYTICS_TABLE).upsert(

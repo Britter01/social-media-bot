@@ -119,6 +119,18 @@ if not _ensure("apscheduler"):
 # --- shared fixtures --------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _reset_storage_singleton():
+    """Keep tests hermetic: core.storage caches a process-wide Storage singleton,
+    so one test constructing it (e.g. with base_config's dummy Supabase URL)
+    would leak a live client into every later test."""
+    import core.storage as _storage_mod
+
+    _storage_mod._storage = None
+    yield
+    _storage_mod._storage = None
+
+
 @pytest.fixture
 def base_config():
     """A ``Config`` populated with dummy credentials for every service."""

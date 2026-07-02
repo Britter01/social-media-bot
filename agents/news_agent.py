@@ -373,8 +373,15 @@ class NewsAgent:
                         "image_url": url,
                     }
                 )
-            except Exception:
+            except Exception as exc:
+                # Fail the whole run rather than publish an incomplete carousel —
+                # a missing story slide (or worse, a missing cover) would go out
+                # silently. The command queue surfaces the error with a retry.
                 logger.exception("NewsAgent: failed to render/upload slide %d", idx)
+                raise RuntimeError(
+                    f"news carousel slide {idx} ({slide['role']}) failed: "
+                    f"{type(exc).__name__}: {exc}"
+                ) from exc
 
         return result
 
