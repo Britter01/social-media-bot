@@ -15,6 +15,7 @@ import base64
 import calendar
 import hmac
 import html
+import json
 import logging
 import os
 import time
@@ -578,6 +579,29 @@ def _supabase_sql_editor_url() -> str:
 # ── Data ──────────────────────────────────────────────────────────────────────
 
 
+@st.cache_data(ttl=300)
+def _get_worker_platform_status() -> dict | None:
+    """Return the worker's platform status file, or None if unavailable.
+
+    The worker writes config/platform_status.json to Storage at startup,
+    listing the platforms it actually has API credentials for. Without it
+    the sidebar can't distinguish "actively publishing" from "never posts —
+    no credentials configured".
+    """
+    try:
+        bucket = st.secrets.get("SUPABASE_BUCKET") or os.getenv("SUPABASE_BUCKET", "media")
+    except (FileNotFoundError, AttributeError):
+        bucket = os.getenv("SUPABASE_BUCKET", "media")
+    try:
+        raw = db.storage.from_(bucket).download("config/platform_status.json")
+        data = json.loads(raw.decode())
+        if isinstance(data.get("configured"), list):
+            return data
+    except Exception:
+        pass
+    return None
+
+
 @st.cache_data(ttl=60)
 def load_topics():
     return (
@@ -1031,7 +1055,15 @@ def _render_pipeline_controls(scope: str) -> None:
             "text-transform:uppercase;color:#888;margin-bottom:6px'>Platform Publishing</div>",
             unsafe_allow_html=True,
         )
-        st.caption("Pauses automatic scheduled posts. Manual Publish Now always works.")
+        st.caption(
+            "Pauses automatic scheduled posts. Manual Publish Now always works. "
+            "Greyed platforms have no API credentials on the worker and never post."
+        )
+
+        _worker_status = _get_worker_platform_status()
+        _configured_plats = (
+            set(_worker_status["configured"]) if _worker_status is not None else None
+        )
 
         _PLATFORM_LABELS = {
             "instagram": "Instagram",
@@ -1043,9 +1075,18 @@ def _render_pipeline_controls(scope: str) -> None:
         }
         for _plat, _plat_label in _PLATFORM_LABELS.items():
             _plat_paused, _plat_since = _sel.get(_plat, (False, None))
+            # Only grey out when the worker has told us its credentials —
+            # with no status file yet, fall back to showing the buttons.
+            _not_configured = _configured_plats is not None and _plat not in _configured_plats
             _col_a, _col_b = st.columns([3, 2])
             with _col_a:
-                if _plat_paused:
+                if _not_configured:
+                    st.markdown(
+                        f"<div style='font-size:13px;font-weight:400;color:{SILVER};"
+                        f"line-height:2.2'>{_plat_label}</div>",
+                        unsafe_allow_html=True,
+                    )
+                elif _plat_paused:
                     st.markdown(
                         f"<div style='font-size:13px;font-weight:600;color:#7B4F00;"
                         f"line-height:2.2'>{_plat_label} ⏸</div>",
@@ -1058,7 +1099,16 @@ def _render_pipeline_controls(scope: str) -> None:
                         unsafe_allow_html=True,
                     )
             with _col_b:
-                if _plat_paused:
+                if _not_configured:
+                    st.markdown(
+                        f"<div style='font-size:11px;font-weight:600;color:{SILVER};"
+                        f"border:1px solid {SMOKE};border-radius:20px;text-align:center;"
+                        f"padding:6px 8px;line-height:1.3' "
+                        f"title='No API credentials on the worker — this platform never "
+                        f"posts. Add its keys in Railway to enable it.'>Not set up</div>",
+                        unsafe_allow_html=True,
+                    )
+                elif _plat_paused:
                     if st.button(
                         "▶ Resume",
                         key=f"{scope}_resume_plat_{_plat}",

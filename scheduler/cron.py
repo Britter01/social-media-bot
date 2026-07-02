@@ -695,10 +695,22 @@ def run_publisher(ignore_platform_pause: bool = False) -> None:
         return
 
     logger.info("Publishing %d due post(s)", len(due))
+    _configured = set(config.configured_platforms())
     for post in due:
         if not ignore_platform_pause and _is_platform_paused(post.platform):
             logger.info(
                 "Platform %s is paused — skipping post %s (resume to publish automatically)",
+                post.platform,
+                post.id,
+            )
+            continue
+        # Scheduled runs never attempt platforms with no credentials — the
+        # attempt can only fail. A manual Publish Now still goes through so
+        # the user sees the real (missing-credentials) error instead of
+        # silence.
+        if not ignore_platform_pause and post.platform not in _configured:
+            logger.info(
+                "Platform %s has no API credentials — leaving post %s scheduled",
                 post.platform,
                 post.id,
             )
@@ -855,6 +867,7 @@ def run_diagnostics() -> str:
     The result is a single line surfaced on the dashboard Pipeline tab.
     """
     logger.info("=== Diagnostics starting ===")
+    write_platform_status()
     parts: list[str] = []
 
     # 1. Config presence (never reveal the actual secret values).
@@ -1576,6 +1589,34 @@ _CONTENT_GEN_FLAG_PATH = "config/content_generation.paused"
 _PLATFORM_PAUSE_PREFIX = "config/platform_paused."
 _PLATFORM_TELEGRAM_PREFIX = "config/telegram_mode."
 _TELEGRAM_MODE_PLATFORMS = ("facebook", "twitter", "linkedin")
+_PLATFORM_STATUS_PATH = "config/platform_status.json"
+
+
+def write_platform_status() -> None:
+    """Publish which platforms this worker can actually post to.
+
+    The dashboard reads this file to grey out platforms that have no API
+    credentials — without it the sidebar implies every platform is actively
+    publishing. Written at worker startup (credentials only change with a
+    redeploy) and refreshed by the diagnostics command.
+    """
+    import json
+
+    from core.storage import get_storage
+
+    try:
+        payload = json.dumps(
+            {
+                "configured": config.configured_platforms(),
+                "disabled": config.disabled_platforms,
+                "dry_run": config.dry_run,
+                "updated_at": datetime.now(UTC).isoformat(),
+            }
+        ).encode()
+        get_storage().upload(_PLATFORM_STATUS_PATH, payload, content_type="application/json")
+        logger.info("Platform status written: configured=%s", config.configured_platforms())
+    except Exception:
+        logger.exception("Could not write platform status file")
 
 
 def _is_automation_paused() -> bool:
@@ -2320,6 +2361,9 @@ def main() -> None:
         config.timezone,
         config.dry_run,
     )
+
+    # Tell the dashboard which platforms this worker can actually post to.
+    write_platform_status()
 
     scheduler = build_scheduler()
 
