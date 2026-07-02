@@ -2286,6 +2286,65 @@ if "_gen_hidden" not in st.session_state:
     st.session_state["_gen_hidden"] = set()
 
 with tab_generated:
+    # Handle clicks from the previous render BEFORE drawing anything. Button
+    # state is already in st.session_state at the top of the run, so an
+    # actioned card is simply never rendered. (Never mutate a card's container
+    # from inside its own handler — replacing a container while adding
+    # elements to it corrupts Streamlit's render tree and white-screens
+    # the whole app.)
+    def _gen_mark_posted(_pid: str) -> None:
+        db.table("posts").update(
+            {
+                "status": "published",
+                "published_time": datetime.now(UTC).isoformat(),
+                "platform_post_id": "manual",
+            }
+        ).eq("id", _pid).execute()
+        st.session_state["_gen_hidden"].add(_pid)
+        st.cache_data.clear()
+        st.toast("✅ Marked as posted.")
+
+    for _gp in generated:
+        _gpid = _gp.get("id", "")
+        if not _gpid or _gpid in st.session_state["_gen_hidden"]:
+            continue
+        if st.session_state.get(f"gen_markposted_{_gpid}"):
+            _gen_mark_posted(_gpid)
+        elif st.session_state.get(f"gen_postnow_{_gpid}"):
+            db.table("posts").update(
+                {"status": "scheduled", "scheduled_time": datetime.now(UTC).isoformat()}
+            ).eq("id", _gpid).execute()
+            try:
+                _queue_command("publish", cooldown_key=f"pub_{_gpid}")
+            except RuntimeError:
+                pass
+            st.session_state["_gen_hidden"].add(_gpid)
+            st.cache_data.clear()
+            st.toast("📤 Publishing queued — posted within ~1 minute.")
+        elif st.session_state.get(f"gen_sched_{_gpid}"):
+            try:
+                _queue_command(f"schedule_post|{_gpid}", cooldown_key=f"schedpost_{_gpid}")
+                st.session_state["_gen_hidden"].add(_gpid)
+                st.cache_data.clear()
+                st.toast("📅 Added to the schedule queue.")
+            except RuntimeError:
+                st.toast("Already scheduling this post.")
+        elif st.session_state.get(f"gen_dismiss_{_gpid}"):
+            db.table("posts").update({"status": "dismissed"}).eq("id", _gpid).execute()
+            st.session_state["_gen_hidden"].add(_gpid)
+            st.cache_data.clear()
+            st.toast("Post dismissed.")
+        elif st.session_state.get(f"gen_resend_{_gpid}"):
+            db.table("posts").update(
+                {"status": "scheduled", "scheduled_time": datetime.now(UTC).isoformat()}
+            ).eq("id", _gpid).execute()
+            try:
+                _queue_command("publish", cooldown_key=f"pub_{_gpid}")
+            except RuntimeError:
+                pass
+            st.cache_data.clear()
+            st.toast("🔁 Resending to Telegram…")
+
     # Filter out posts the user has already actioned this session.
     visible_generated = [p for p in generated if p.get("id") not in st.session_state["_gen_hidden"]]
     if not visible_generated:
@@ -2307,14 +2366,12 @@ with tab_generated:
         cols = st.columns(3)
         for i, p in enumerate(gen_sorted):
             with cols[i % 3]:
-                # Each card renders inside an st.empty() slot so button handlers can
-                # replace it with a confirmation immediately, without an st.rerun()
-                # (which would reset the active tab).
-                _card_slot = st.empty()
-                with _card_slot.container(border=True):
+                with st.container(border=True):
                     _post_card(p, "Ready to post", "manual_ready")
                     pid = p.get("id", "")
                     _is_tg_post = (p.get("meta") or {}).get("delivery") == "telegram"
+                    # Buttons only — clicks are handled by the pre-pass at the
+                    # top of this tab on the next run, then the card vanishes.
                     if pid:
                         if _is_tg_post:
                             # Instagram post delivered to Telegram — user posts natively
@@ -2328,110 +2385,48 @@ with tab_generated:
                             )
                             btn_tg, btn_done = st.columns(2)
                             with btn_tg:
-                                if st.button(
+                                st.button(
                                     "🔁 Resend",
                                     key=f"gen_resend_{pid}",
                                     use_container_width=True,
                                     help="Send the image and caption to Telegram again.",
-                                ):
-                                    db.table("posts").update(
-                                        {
-                                            "status": "scheduled",
-                                            "scheduled_time": datetime.now(UTC).isoformat(),
-                                        }
-                                    ).eq("id", pid).execute()
-                                    try:
-                                        _queue_command("publish", cooldown_key=f"pub_{pid}")
-                                    except RuntimeError:
-                                        pass
-                                    st.cache_data.clear()
+                                )
                             with btn_done:
-                                if st.button(
+                                st.button(
                                     "✅ Mark Posted",
                                     key=f"gen_markposted_{pid}",
                                     use_container_width=True,
                                     type="primary",
                                     help="Confirm you've posted this in Instagram — marks it as published.",
-                                ):
-                                    db.table("posts").update(
-                                        {
-                                            "status": "published",
-                                            "published_time": datetime.now(UTC).isoformat(),
-                                            "platform_post_id": "manual",
-                                        }
-                                    ).eq("id", pid).execute()
-                                    st.session_state["_gen_hidden"].add(pid)
-                                    st.cache_data.clear()
-                                    _card_slot.success("✅ Marked as posted.")
+                                )
                         else:
                             btn1, btn2 = st.columns(2)
                             with btn1:
-                                if st.button(
+                                st.button(
                                     "📤 Post Now",
                                     key=f"gen_postnow_{pid}",
                                     use_container_width=True,
                                     type="primary",
                                     help="Publish to the platform within ~1 minute.",
-                                ):
-                                    db.table("posts").update(
-                                        {
-                                            "status": "scheduled",
-                                            "scheduled_time": datetime.now(UTC).isoformat(),
-                                        }
-                                    ).eq("id", pid).execute()
-                                    try:
-                                        _queue_command("publish", cooldown_key=f"pub_{pid}")
-                                    except RuntimeError:
-                                        pass
-                                    st.session_state["_gen_hidden"].add(pid)
-                                    st.cache_data.clear()
-                                    _card_slot.success(
-                                        "📤 Publishing queued — posted within ~1 minute."
-                                    )
+                                )
                             with btn2:
-                                if st.button(
+                                st.button(
                                     "📅 Schedule",
                                     key=f"gen_sched_{pid}",
                                     use_container_width=True,
                                     help="Let the auto-scheduler find the next optimal slot.",
-                                ):
-                                    try:
-                                        _queue_command(
-                                            f"schedule_post|{pid}",
-                                            cooldown_key=f"schedpost_{pid}",
-                                        )
-                                        st.session_state["_gen_hidden"].add(pid)
-                                        st.cache_data.clear()
-                                        _card_slot.success("📅 Added to the schedule queue.")
-                                    except RuntimeError:
-                                        st.warning("Already scheduling this post.")
-                            if st.button(
+                                )
+                            st.button(
                                 "✅ Mark as Posted",
                                 key=f"gen_markposted_{pid}",
                                 use_container_width=True,
                                 help="Already posted this manually? Mark it as published.",
-                            ):
-                                db.table("posts").update(
-                                    {
-                                        "status": "published",
-                                        "published_time": datetime.now(UTC).isoformat(),
-                                        "platform_post_id": "manual",
-                                    }
-                                ).eq("id", pid).execute()
-                                st.session_state["_gen_hidden"].add(pid)
-                                st.cache_data.clear()
-                                _card_slot.success("✅ Marked as posted.")
-                        if st.button(
+                            )
+                        st.button(
                             "Dismiss",
                             key=f"gen_dismiss_{pid}",
                             use_container_width=True,
-                        ):
-                            db.table("posts").update({"status": "dismissed"}).eq(
-                                "id", pid
-                            ).execute()
-                            st.session_state["_gen_hidden"].add(pid)
-                            st.cache_data.clear()
-                            _card_slot.empty()
+                        )
 
 # ── Calendar ──────────────────────────────────────────────────────────────────
 
