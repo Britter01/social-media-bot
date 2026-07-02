@@ -667,7 +667,7 @@ def _cmd_is_recent(row: dict | None, max_minutes: int = 10) -> bool:
         return False
 
 
-_WORKER_STALE_MINUTES = 6  # worker polls every 2 min; >6 min = three missed cycles
+_WORKER_STALE_MINUTES = 5  # worker polls every 15 s; >5 min = many missed cycles
 
 
 def _get_worker_health(_db) -> dict:
@@ -946,9 +946,14 @@ def _queue_command(command: str, cooldown_key: str | None = None) -> None:
     st.session_state[key] = now
 
 
+@st.fragment
 def _render_pipeline_controls(scope: str) -> None:
     """Render the pipeline command buttons. ``scope`` keeps widget keys unique
-    so the same controls can appear in the sidebar and the main body."""
+    so the same controls can appear in the sidebar and the main body.
+
+    Runs as a fragment: clicking any button here reruns only this section
+    instead of the whole 3,000-line page, so controls feel instant.
+    """
 
     # ── Master kill-switch — always visible ──────────────────────────────────
     _auto_paused, _auto_since = _get_automation_state(db)
@@ -969,7 +974,7 @@ def _render_pipeline_controls(scope: str) -> None:
         ):
             try:
                 _queue_command("resume_automation", cooldown_key="automation_switch")
-                st.success("Resume queued — automation restarts within ~2 min.")
+                st.success("Resume queued — automation restarts within ~30 s.")
             except RuntimeError:
                 pass
             except Exception:
@@ -988,7 +993,7 @@ def _render_pipeline_controls(scope: str) -> None:
         ):
             try:
                 _queue_command("pause_automation", cooldown_key="automation_switch")
-                st.warning("Pause queued — automation stops within ~2 min.")
+                st.warning("Pause queued — automation stops within ~30 s.")
             except RuntimeError:
                 pass
             except Exception:
@@ -1022,7 +1027,7 @@ def _render_pipeline_controls(scope: str) -> None:
             ):
                 try:
                     _queue_command("resume_content_gen", cooldown_key="cg_switch")
-                    st.success("Resume queued — content creation restarts within ~2 min.")
+                    st.success("Resume queued — content creation restarts within ~30 s.")
                 except RuntimeError:
                     pass
                 except Exception:
@@ -1040,7 +1045,7 @@ def _render_pipeline_controls(scope: str) -> None:
             ):
                 try:
                     _queue_command("pause_content_gen", cooldown_key="cg_switch")
-                    st.warning("Pause queued — content creation stops within ~2 min.")
+                    st.warning("Pause queued — content creation stops within ~30 s.")
                 except RuntimeError:
                     pass
                 except Exception:
@@ -1408,7 +1413,7 @@ def _render_pipeline_controls(scope: str) -> None:
             ):
                 try:
                     _queue_command("instagram_telegram_mode", cooldown_key="instagram_mode")
-                    st.success("Switching to Telegram mode — takes effect within ~2 min.")
+                    st.success("Switching to Telegram mode — takes effect within ~30 s.")
                 except RuntimeError:
                     pass
                 except Exception:
@@ -1433,7 +1438,7 @@ def _render_pipeline_controls(scope: str) -> None:
                 try:
                     _queue_command("instagram_api_mode", cooldown_key="instagram_mode")
                     st.info(
-                        "Switching to API mode — Instagram posts will auto-publish within ~2 min."
+                        "Switching to API mode — Instagram posts will auto-publish within ~30 s."
                     )
                 except RuntimeError:
                     pass
@@ -1531,7 +1536,7 @@ def _render_pipeline_controls(scope: str) -> None:
         ):
             try:
                 _queue_command("diagnostics", cooldown_key="diagnostics")
-                st.info("System check queued — the result appears below within ~2 min.")
+                st.info("System check queued — the result appears below within ~1 min.")
             except RuntimeError:
                 pass
             except Exception:
@@ -1557,7 +1562,7 @@ def _render_pipeline_controls(scope: str) -> None:
         ):
             try:
                 _queue_command("cleanup_hashtags", cooldown_key="cleanup_hashtags")
-                st.info("Hashtag cleanup queued — the result appears below within ~2 min.")
+                st.info("Hashtag cleanup queued — the result appears below within ~1 min.")
             except RuntimeError:
                 pass
             except Exception:
@@ -1585,7 +1590,7 @@ def _render_pipeline_controls(scope: str) -> None:
         ):
             try:
                 _queue_command("reset_stuck", cooldown_key="reset_stuck")
-                st.info("Reset queued — stuck posts will be rescheduled within ~2 min.")
+                st.info("Reset queued — stuck posts will be rescheduled within ~1 min.")
             except RuntimeError:
                 pass
             except Exception:
@@ -1614,7 +1619,7 @@ def _render_pipeline_controls(scope: str) -> None:
         ):
             try:
                 _queue_command("refresh_token", cooldown_key="refresh_token")
-                st.info("Token refresh queued — the result appears below within ~2 min.")
+                st.info("Token refresh queued — the result appears below within ~1 min.")
             except RuntimeError:
                 pass
             except Exception:
@@ -1633,7 +1638,9 @@ def _render_pipeline_controls(scope: str) -> None:
     # ── Refresh — always visible ──────────────────────────────────────────────
     if st.button("↺  Refresh data now", use_container_width=True, key=f"{scope}_refresh"):
         st.cache_data.clear()
-        st.rerun()
+        # Full-app rerun on purpose: this runs inside a fragment, where a bare
+        # st.rerun() would only redraw the controls, not the refreshed data.
+        st.rerun(scope="app")
 
 
 with st.sidebar:
@@ -2261,7 +2268,7 @@ with tab_scheduled:
                             except RuntimeError:
                                 pass
                             st.cache_data.clear()
-                            st.success("📤 Publishing queued — posted within ~2 minutes.")
+                            st.success("📤 Publishing queued — posted within ~1 minute.")
                         if pid and st.button(
                             "Dismiss", key=f"dismiss_sched_{pid}", use_container_width=True
                         ):
@@ -2364,7 +2371,7 @@ with tab_generated:
                                     key=f"gen_postnow_{pid}",
                                     use_container_width=True,
                                     type="primary",
-                                    help="Publish to the platform within ~2 minutes.",
+                                    help="Publish to the platform within ~1 minute.",
                                 ):
                                     db.table("posts").update(
                                         {
@@ -2379,7 +2386,7 @@ with tab_generated:
                                     st.session_state["_gen_hidden"].add(pid)
                                     st.cache_data.clear()
                                     _card_slot.success(
-                                        "📤 Publishing queued — posted within ~2 minutes."
+                                        "📤 Publishing queued — posted within ~1 minute."
                                     )
                             with btn2:
                                 if st.button(
@@ -2826,6 +2833,7 @@ def _build_archive_zip(files: list[dict]) -> tuple[bytes, list[str]]:
     return buf.getvalue(), saved
 
 
+@st.fragment
 def _render_storage_cleanup():
     st.markdown("#### 🗄 Storage archive & cleanup")
     st.caption(

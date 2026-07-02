@@ -1264,14 +1264,18 @@ def run_diagnostics() -> str:
     return report
 
 
+_last_reap_at: datetime | None = None
+
+
 def run_pending_commands() -> None:
     """Execute any manual pipeline commands queued by the dashboard.
 
     The dashboard inserts rows into ``pipeline_commands`` with status=pending.
-    This job (running every 2 min) picks them up, runs the appropriate function
+    This job (running every 15 s) picks them up, runs the appropriate function
     in the worker process (which has all packages installed), and marks them done.
     Unknown commands are marked failed so the dashboard can surface the error.
     """
+    global _last_reap_at
     from supabase import create_client
 
     try:
@@ -1283,27 +1287,33 @@ def run_pending_commands() -> None:
     # Reap commands stuck in 'running' — a worker restart/redeploy mid-command
     # leaves the row in 'running' forever (only 'pending' rows are re-selected),
     # so the dashboard would show it as running and the outcome is lost.
-    try:
-        _stale = (datetime.now(UTC) - timedelta(minutes=60)).isoformat()
-        reaped = (
-            sb.table("pipeline_commands")
-            .update(
-                {
-                    "status": "failed",
-                    "finished_at": datetime.now(UTC).isoformat(),
-                    "error": "worker restarted while this command was running — please retry",
-                }
+    # Throttled to every 10 min so the 15-second poll stays a single SELECT.
+    _reap_due = _last_reap_at is None or (datetime.now(UTC) - _last_reap_at) > timedelta(minutes=10)
+    if _reap_due:
+        _last_reap_at = datetime.now(UTC)
+        try:
+            _stale = (datetime.now(UTC) - timedelta(minutes=60)).isoformat()
+            reaped = (
+                sb.table("pipeline_commands")
+                .update(
+                    {
+                        "status": "failed",
+                        "finished_at": datetime.now(UTC).isoformat(),
+                        "error": "worker restarted while this command was running — please retry",
+                    }
+                )
+                .eq("status", "running")
+                .lt("started_at", _stale)
+                .execute()
+                .data
+                or []
             )
-            .eq("status", "running")
-            .lt("started_at", _stale)
-            .execute()
-            .data
-            or []
-        )
-        if reaped:
-            logger.warning("Command queue: reaped %d command(s) stuck in 'running'", len(reaped))
-    except Exception:
-        logger.debug("Command queue: stuck-running reaper failed", exc_info=True)
+            if reaped:
+                logger.warning(
+                    "Command queue: reaped %d command(s) stuck in 'running'", len(reaped)
+                )
+        except Exception:
+            logger.debug("Command queue: stuck-running reaper failed", exc_info=True)
 
     try:
         rows = (
@@ -2281,13 +2291,15 @@ def build_scheduler():
     # run_pending_commands is NOT guarded — it IS the control plane.
     # It processes pause_automation / resume_automation commands; guarding it
     # would make the system impossible to resume without a Railway redeploy.
+    # 15-second poll keeps dashboard buttons feeling responsive; each empty
+    # poll is one tiny SELECT (Supabase has no per-request charge).
     scheduler.add_job(
         run_pending_commands,
-        trigger=IntervalTrigger(minutes=2),
+        trigger=IntervalTrigger(seconds=15),
         id="command_queue",
         max_instances=1,
         coalesce=True,
-        misfire_grace_time=120,
+        misfire_grace_time=60,
     )
 
     # Maintenance jobs — no API cost, always run regardless of pause state.
