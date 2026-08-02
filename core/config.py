@@ -112,6 +112,19 @@ class Config:
 
     linkedin_access_token: str | None = None
     linkedin_author_urn: str | None = None
+    # Company-page URN (urn:li:organization:NNNNN) for the Brite Tech Lifestyle
+    # page. When set, LinkedIn posts are published to the page *as well as* the
+    # personal profile (see linkedin_post_targets). Leave unset to auto-discover
+    # it from the pages the token's member administers.
+    #
+    # NOTE: posting as an organization requires the token to carry the
+    # w_organization_social scope, which LinkedIn only grants to apps approved
+    # for the Community Management API. A plain "Share on LinkedIn" app can
+    # publish to the personal profile only.
+    linkedin_org_urn: str | None = None
+    # Where LinkedIn posts go: "both" (default), "personal", or "organization".
+    # "both" falls back to personal-only when no company page can be resolved.
+    linkedin_post_targets: str = "both"
 
     youtube_client_id: str | None = None
     youtube_client_secret: str | None = None
@@ -229,6 +242,8 @@ class Config:
             twitter_access_secret=_get("TWITTER_ACCESS_SECRET"),
             linkedin_access_token=_get("LINKEDIN_ACCESS_TOKEN"),
             linkedin_author_urn=_get("LINKEDIN_AUTHOR_URN"),
+            linkedin_org_urn=_get("LINKEDIN_ORG_URN"),
+            linkedin_post_targets=(_get("LINKEDIN_POST_TARGETS", "both") or "both").strip().lower(),
             youtube_client_id=_get("YOUTUBE_CLIENT_ID"),
             youtube_client_secret=_get("YOUTUBE_CLIENT_SECRET"),
             youtube_refresh_token=_get("YOUTUBE_REFRESH_TOKEN"),

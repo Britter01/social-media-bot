@@ -81,6 +81,12 @@ class PublisherAgent:
 
     def __init__(self, cfg: Config = config) -> None:
         self._cfg = cfg
+        # Resolved LinkedIn company-page URN, cached for the agent's lifetime so
+        # the discovery lookup runs once per run rather than once per post.
+        # Unset sentinel is the attribute being absent; None means "looked up,
+        # no page available".
+        self._li_org_urn_resolved: str | None = None
+        self._li_org_urn_looked_up = False
 
     @staticmethod
     def _ig_fb_caption(post: Post) -> str:
@@ -725,6 +731,50 @@ class PublisherAgent:
             logger.warning("LinkedIn userinfo lookup failed (%s); using configured URN", exc)
             return None
 
+    def _linkedin_org_urn(self, client: httpx.Client) -> str | None:
+        """Return the company-page URN to publish to, or ``None`` if there isn't one.
+
+        Prefers the configured LINKEDIN_ORG_URN. When that's unset, asks LinkedIn
+        which organizations the token's member administers (``organizationAcls``,
+        needs the ``rw_organization_admin`` scope) and uses the first one — so the
+        page works without hand-copying a numeric URN. Returns ``None`` on any
+        failure: the page is an *addition* to the personal post, never a
+        precondition for it.
+        """
+        configured = (self._cfg.linkedin_org_urn or "").strip()
+        if configured:
+            return configured
+        if self._li_org_urn_looked_up:
+            return self._li_org_urn_resolved
+        self._li_org_urn_looked_up = True
+        try:
+            resp = client.get(
+                "https://api.linkedin.com/v2/organizationAcls",
+                params={"q": "roleAssignee", "role": "ADMINISTRATOR", "state": "APPROVED"},
+                headers={
+                    "Authorization": f"Bearer {self._cfg.linkedin_access_token}",
+                    "X-Restli-Protocol-Version": "2.0.0",
+                },
+            )
+            resp.raise_for_status()
+            for element in resp.json().get("elements", []):
+                org = element.get("organizationalTarget") or element.get("organization")
+                if org:
+                    logger.info("LinkedIn: discovered administered company page %s", org)
+                    self._li_org_urn_resolved = str(org)
+                    return self._li_org_urn_resolved
+        except Exception as exc:
+            # Broad catch on purpose: page discovery is best-effort and must
+            # never take down the personal post. A token without the
+            # rw_organization_admin scope 403s here, which is expected.
+            logger.info(
+                "LinkedIn: could not look up administered company pages (%s); "
+                "posting to the personal profile only. Set LINKEDIN_ORG_URN to "
+                "target a page explicitly.",
+                exc,
+            )
+        return None
+
     def _linkedin_register_and_upload(
         self, client: httpx.Client, author: str, image_url: str
     ) -> str | None:
@@ -774,94 +824,162 @@ class PublisherAgent:
         up.raise_for_status()
         return asset
 
+    def _linkedin_share_as(
+        self,
+        client: httpx.Client,
+        candidates: list[str],
+        post: Post,
+        headers: dict,
+    ) -> tuple[str, httpx.Response | None]:
+        """Publish one ugcPost, trying each author URN in *candidates* in turn.
+
+        Returns ``(post_id, None)`` on success and ``("", last_response)`` when
+        every candidate was rejected — the caller decides whether that's fatal
+        (the personal post) or just a warning (the company page).
+        """
+        has_image = bool(post.thumbnail_url)
+        last_resp: httpx.Response | None = None
+        for author in candidates:
+            share_content: dict = {
+                "shareCommentary": {"text": post.caption_with_hashtags[:3000]},
+                "shareMediaCategory": "NONE",
+            }
+            if has_image:
+                # The asset is registered per-owner, so it must be re-uploaded
+                # for each author — a member-owned asset can't be shared by a
+                # company page and vice versa.
+                asset = self._linkedin_register_and_upload(client, author, post.thumbnail_url)
+                if asset is None:
+                    # Owner URN format rejected — try the next prefix.
+                    logger.warning("LinkedIn rejected image owner %r; trying next format", author)
+                    continue
+                media_item: dict = {"status": "READY", "media": asset}
+                title = (post.title or post.topic or "").strip()
+                if title:
+                    media_item["title"] = {"text": title[:200]}
+                share_content["shareMediaCategory"] = "IMAGE"
+                share_content["media"] = [media_item]
+
+            payload: dict = {
+                "author": author,
+                "lifecycleState": "PUBLISHED",
+                "specificContent": {"com.linkedin.ugc.ShareContent": share_content},
+                "visibility": {"com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC"},
+            }
+            resp = client.post(
+                "https://api.linkedin.com/v2/ugcPosts",
+                headers=headers,
+                json=payload,
+            )
+            if resp.is_success:
+                # Log the author URN that worked so the real id can be copied
+                # into LINKEDIN_AUTHOR_URN / LINKEDIN_ORG_URN for consistency.
+                logger.info("LinkedIn published as author %s", author)
+                return (resp.headers.get("x-restli-id") or resp.json().get("id", ""), None)
+            last_resp = resp
+            # Only worth trying the next prefix when LinkedIn specifically
+            # rejected the author format; any other error won't be fixed by
+            # swapping the prefix.
+            if not (resp.status_code == 422 and "author" in resp.text.lower()):
+                break
+            logger.warning(
+                "LinkedIn rejected author %r (%s); trying next format",
+                author,
+                resp.status_code,
+            )
+        return ("", last_resp)
+
     def _publish_linkedin(self, post: Post) -> str:
         # Uses the classic UGC Posts API (/v2/ugcPosts), not the newer
         # versioned /rest/posts endpoint. /rest/posts requires the gated
         # Community Management API product, which consumer-tier apps don't
         # get — it returns a bare 403. /v2/ugcPosts works with a plain
         # "Share on LinkedIn" app and the w_member_social scope.
+        #
+        # Posts go to the personal profile and (when a company page is
+        # configured/discoverable) to the Brite Tech Lifestyle page as well.
+        # The page share needs the w_organization_social scope; without it
+        # LinkedIn rejects it and only the personal post lands — deliberately
+        # non-fatal, so a scope gap never costs the personal post too.
         self._cfg.require("linkedin_access_token")
         headers = {
             "Authorization": f"Bearer {self._cfg.linkedin_access_token}",
             "X-Restli-Protocol-Version": "2.0.0",
             "Content-Type": "application/json",
         }
-        has_image = bool(post.thumbnail_url)
-        if has_image:
+        if post.thumbnail_url:
             _validate_media_url(post.thumbnail_url, label="thumbnail_url")
 
+        targets = self._cfg.linkedin_post_targets or "both"
+        want_personal = targets in ("both", "personal")
+        want_org = targets in ("both", "organization")
+
         with httpx.Client(timeout=60.0) as client:
-            # Prefer the id derived from the token. LinkedIn validates the
-            # author URN strictly: it must be the real member/person id (and
-            # the prefix it accepts varies — some apps want urn:li:person:,
-            # others urn:li:member:). Try the derived id under both prefixes,
-            # then fall back to whatever is configured.
-            member_id = self._linkedin_member_id(client)
-            if member_id:
-                candidates = [f"urn:li:person:{member_id}", f"urn:li:member:{member_id}"]
-            elif self._cfg.linkedin_author_urn:
-                candidates = [self._cfg.linkedin_author_urn]
-            else:
-                raise PublishError(
-                    "Cannot determine the LinkedIn author URN: the token lacks the "
-                    "'openid'/'profile' scope (so the member id can't be derived) and "
-                    "LINKEDIN_AUTHOR_URN is not set. Regenerate the token with the "
-                    "openid and profile scopes, or set LINKEDIN_AUTHOR_URN."
-                )
-
+            person_id = ""
+            org_id = ""
             last_resp: httpx.Response | None = None
-            for author in candidates:
-                share_content: dict = {
-                    "shareCommentary": {"text": post.caption_with_hashtags[:3000]},
-                    "shareMediaCategory": "NONE",
-                }
-                if has_image:
-                    asset = self._linkedin_register_and_upload(client, author, post.thumbnail_url)
-                    if asset is None:
-                        # Owner URN format rejected — try the next prefix.
+
+            if want_personal:
+                # Prefer the id derived from the token. LinkedIn validates the
+                # author URN strictly: it must be the real member/person id (and
+                # the prefix it accepts varies — some apps want urn:li:person:,
+                # others urn:li:member:). Try the derived id under both prefixes,
+                # then fall back to whatever is configured.
+                member_id = self._linkedin_member_id(client)
+                if member_id:
+                    candidates = [f"urn:li:person:{member_id}", f"urn:li:member:{member_id}"]
+                elif self._cfg.linkedin_author_urn:
+                    candidates = [self._cfg.linkedin_author_urn]
+                else:
+                    raise PublishError(
+                        "Cannot determine the LinkedIn author URN: the token lacks the "
+                        "'openid'/'profile' scope (so the member id can't be derived) and "
+                        "LINKEDIN_AUTHOR_URN is not set. Regenerate the token with the "
+                        "openid and profile scopes, or set LINKEDIN_AUTHOR_URN."
+                    )
+                person_id, last_resp = self._linkedin_share_as(client, candidates, post, headers)
+
+            if want_org:
+                org_urn = self._linkedin_org_urn(client)
+                if org_urn:
+                    org_id, org_resp = self._linkedin_share_as(client, [org_urn], post, headers)
+                    if not org_id:
+                        detail = org_resp.text[:300] if org_resp is not None else "no response"
+                        status = org_resp.status_code if org_resp is not None else "—"
                         logger.warning(
-                            "LinkedIn rejected image owner %r; trying next format", author
+                            "LinkedIn company-page post failed for %s (%s): %s. The token "
+                            "likely lacks the w_organization_social scope (Community "
+                            "Management API product).",
+                            org_urn,
+                            status,
+                            detail,
                         )
-                        continue
-                    media_item: dict = {"status": "READY", "media": asset}
-                    title = (post.title or post.topic or "").strip()
-                    if title:
-                        media_item["title"] = {"text": title[:200]}
-                    share_content["shareMediaCategory"] = "IMAGE"
-                    share_content["media"] = [media_item]
+                        if not want_personal:
+                            last_resp = org_resp
+                elif not want_personal:
+                    raise PublishError(
+                        "LINKEDIN_POST_TARGETS=organization but no company page could be "
+                        "resolved: set LINKEDIN_ORG_URN (urn:li:organization:NNNNN)."
+                    )
 
-                payload: dict = {
-                    "author": author,
-                    "lifecycleState": "PUBLISHED",
-                    "specificContent": {"com.linkedin.ugc.ShareContent": share_content},
-                    "visibility": {"com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC"},
-                }
-                resp = client.post(
-                    "https://api.linkedin.com/v2/ugcPosts",
-                    headers=headers,
-                    json=payload,
-                )
-                if resp.is_success:
-                    # Log the author URN that worked so the real member id can
-                    # be copied into LINKEDIN_AUTHOR_URN for consistency.
-                    logger.info("LinkedIn published as author %s", author)
-                    return resp.headers.get("x-restli-id") or resp.json().get("id", "")
-                last_resp = resp
-                # Only worth trying the next prefix when LinkedIn specifically
-                # rejected the author format; any other error won't be fixed by
-                # swapping the prefix.
-                if not (resp.status_code == 422 and "author" in resp.text.lower()):
-                    break
-                logger.warning(
-                    "LinkedIn rejected author %r (%s); trying next format",
-                    author,
-                    resp.status_code,
-                )
+            if not (person_id or org_id):
+                if last_resp is None:
+                    raise PublishError("LinkedIn: no publish target produced a post")
+                logger.error("LinkedIn %s — body: %s", last_resp.status_code, last_resp.text[:500])
+                last_resp.raise_for_status()
+                return ""
 
-            assert last_resp is not None  # candidates is never empty
-            logger.error("LinkedIn %s — body: %s", last_resp.status_code, last_resp.text[:500])
-            last_resp.raise_for_status()
-            return ""
+            # Record both shares. Only company-page posts expose an analytics
+            # endpoint, so the org share id becomes the primary platform_post_id
+            # when it exists — that's the one AnalyticsAgent can read stats for.
+            delivered = [n for n, v in (("personal", person_id), ("organization", org_id)) if v]
+            post.meta["linkedin"] = {
+                "person_post_id": person_id,
+                "org_post_id": org_id,
+                "delivered_to": delivered,
+            }
+            logger.info("LinkedIn post %s delivered to: %s", post.id, ", ".join(delivered))
+            return org_id or person_id
 
     # --- YouTube (Data API v3) ------------------------------------------
 

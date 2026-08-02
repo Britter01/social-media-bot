@@ -201,7 +201,7 @@ Fill in `.env`. **Leave `DRY_RUN=true` until you've confirmed everything works**
 | Instagram | `INSTAGRAM_ACCESS_TOKEN`, `INSTAGRAM_BUSINESS_ACCOUNT_ID` | Meta Graph API |
 | Facebook | `FACEBOOK_PAGE_ID` | Meta developer portal |
 | X/Twitter | `TWITTER_API_KEY`, `TWITTER_API_SECRET`, `TWITTER_ACCESS_TOKEN`, `TWITTER_ACCESS_SECRET` | X developer portal |
-| LinkedIn | `LINKEDIN_ACCESS_TOKEN`, `LINKEDIN_AUTHOR_URN` | LinkedIn developer app |
+| LinkedIn | `LINKEDIN_ACCESS_TOKEN`, `LINKEDIN_AUTHOR_URN`, `LINKEDIN_ORG_URN`, `LINKEDIN_POST_TARGETS` | LinkedIn developer app |
 | YouTube | `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`, `YOUTUBE_REFRESH_TOKEN` | Google Cloud console |
 | TikTok | `TIKTOK_ACCESS_TOKEN` | TikTok developer portal |
 | Dashboard | `DASHBOARD_PASSWORD` | Set any strong password |
@@ -327,6 +327,7 @@ Set all environment variables in your platform's dashboard and run the `worker` 
 - **Failure isolation.** One failing post or platform never crashes the worker. Failures are logged and the post is marked `failed`. A failed Telegram delivery marks the post `failed` (not silently "sent") so you can retry it.
 - **Publish-once.** The worker atomically claims each post before publishing (`scheduled → publishing`), and the publisher skips posts that already have a platform ID. Commands are claimed atomically too (pending → running), so overlapping workers during a deploy can't run one twice. Safe to run multiple worker instances.
 - **Tuning post times.** Optimal-slot tables live in `agents/scheduler_agent.py`. Replace defaults with your own engagement data over time.
+- **LinkedIn goes to the profile *and* the page.** Each LinkedIn post is published to the personal profile and to the Brite Tech Lifestyle company page. Set `LINKEDIN_ORG_URN` to the page's `urn:li:organization:NNNNN` (or leave it blank to auto-discover the pages the token administers), and use `LINKEDIN_POST_TARGETS` (`both` | `personal` | `organization`) to change that. The page share needs the `w_organization_social` scope — available only to apps approved for LinkedIn's **Community Management API**. Without it the page post is skipped with a warning and the personal post still goes out. The page share is also the only one with an analytics endpoint, so it becomes the post's primary `platform_post_id` and unlocks LinkedIn engagement metrics (personal-profile posts have no analytics API at all).
 - **Token refresh.** LinkedIn and Meta tokens expire. Use the Refresh Meta Token button in the dashboard Maintenance panel, or re-authorise the LinkedIn app and update `LINKEDIN_ACCESS_TOKEN`.
 - **Supabase key.** Use the **service role** key for `SUPABASE_KEY` (not the anon key) so the worker and dashboard bypass Row Level Security and can read/write all rows and list Storage objects (the archive scan needs the latter).
 - **Google Drive is not used.** The pipeline uses Google only for **Imagen** (`GOOGLE_API_KEY`, thumbnails) and the **YouTube Data API** (publishing). There is no Google Drive integration anywhere in the app.

@@ -669,18 +669,19 @@ class AnalyticsAgent:
             logger.debug("LinkedIn access token not set; skipping")
             return None
 
-        # Only organization URNs have an analytics endpoint. A configured
-        # LINKEDIN_AUTHOR_URN of the form urn:li:organization:NNN means a
-        # company page; anything else (or a token that only resolves to a
-        # person) is a personal profile with no analytics API.
-        org_urn = self._cfg.linkedin_author_urn or ""
+        # Only organization URNs have an analytics endpoint. LINKEDIN_ORG_URN
+        # (the company page we cross-post to) is the normal source; a
+        # LINKEDIN_AUTHOR_URN of the form urn:li:organization:NNN also counts.
+        # Anything else is a personal profile with no analytics API.
+        org_urn = self._cfg.linkedin_org_urn or self._cfg.linkedin_author_urn or ""
         if "urn:li:organization" not in org_urn:
             if not self._linkedin_no_org_logged:
                 # Emit this configuration fact only once per agent run so it
                 # appears as (x1) in the summary rather than (x24).
                 self._last_error = (
                     "LinkedIn: personal-profile post analytics are not available via the API "
-                    "(only company pages expose stats; r_member_social is no longer granted)"
+                    "(only company pages expose stats; r_member_social is no longer granted). "
+                    "Set LINKEDIN_ORG_URN to read stats from the company-page cross-post."
                 )
                 self._linkedin_no_org_logged = True
                 logger.info(

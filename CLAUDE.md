@@ -29,14 +29,15 @@ lets the user see which edge is out and by how much.
 # Core warp
 A, b = [], []
 for (sx, sy), (dx, dy) in zip(card_corners, screen_corners):
-    A.append([dx, dy, 1, 0, 0, 0, -sx*dx, -sx*dy])
-    A.append([0, 0, 0, dx, dy, 1, -sy*dx, -sy*dy])
+    A.append([dx, dy, 1, 0, 0, 0, -sx * dx, -sx * dy])
+    A.append([0, 0, 0, dx, dy, 1, -sy * dx, -sy * dy])
     b.extend([sx, sy])
 coeffs = tuple(float(c) for c in np.linalg.solve(np.array(A), np.array(b)))
 warped = card.transform((sw, sh), Image.PERSPECTIVE, coeffs, Image.BICUBIC)
-mask  = Image.new("L", (scr_w, scr_h), 255).transform(
-            (sw, sh), Image.PERSPECTIVE, coeffs, Image.NEAREST)
-comp  = scene.copy()
+mask = Image.new("L", (scr_w, scr_h), 255).transform(
+    (sw, sh), Image.PERSPECTIVE, coeffs, Image.NEAREST
+)
+comp = scene.copy()
 comp.paste(warped.convert("RGBA"), (0, 0), mask)
 ```
 

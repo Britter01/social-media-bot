@@ -174,6 +174,9 @@ def test_linkedin_derives_author_from_userinfo(base_config, monkeypatch):
 
     class _LinkedInClient(_FakeClient):
         def get(self, url, **kwargs):
+            if "organizationAcls" in url:
+                # No administered company page — personal profile only.
+                return _FakeResponse({"elements": []})
             assert url.endswith("/userinfo")
             return _FakeResponse({"sub": "REALid123"})
 
@@ -187,6 +190,81 @@ def test_linkedin_derives_author_from_userinfo(base_config, monkeypatch):
     # Derived from `sub`, ignoring the (different) configured author URN.
     assert captured["author"] == "urn:li:person:REALid123"
     assert post.platform_post_id == "urn:li:share:7"
+
+
+def test_linkedin_posts_to_both_personal_and_company_page(base_config, monkeypatch):
+    """With LINKEDIN_ORG_URN set, the post goes to the page as well as the profile."""
+    authors = []
+
+    class _LinkedInClient(_FakeClient):
+        def get(self, url, **kwargs):
+            return _FakeResponse({"sub": "member1"})
+
+        def post(self, url, **kwargs):
+            author = kwargs["json"]["author"]
+            authors.append(author)
+            share_id = "org-share" if "organization" in author else "person-share"
+            return _FakeResponse({}, headers={"x-restli-id": share_id})
+
+    cfg = dataclasses.replace(base_config, linkedin_org_urn="urn:li:organization:555")
+    monkeypatch.setattr(httpx, "Client", _LinkedInClient)
+    post = Post(pillar="Productivity", platform="linkedin", caption="Focus.")
+    PublisherAgent(cfg).publish(post)
+
+    assert authors == ["urn:li:person:member1", "urn:li:organization:555"]
+    assert post.status == PostStatus.PUBLISHED.value
+    # The org share is primary — it's the only one with an analytics endpoint.
+    assert post.platform_post_id == "org-share"
+    assert post.meta["linkedin"]["person_post_id"] == "person-share"
+    assert post.meta["linkedin"]["org_post_id"] == "org-share"
+    assert post.meta["linkedin"]["delivered_to"] == ["personal", "organization"]
+
+
+def test_linkedin_company_page_failure_does_not_fail_the_personal_post(base_config, monkeypatch):
+    """A missing w_organization_social scope must not cost us the personal post."""
+
+    class _LinkedInClient(_FakeClient):
+        def get(self, url, **kwargs):
+            return _FakeResponse({"sub": "member1"})
+
+        def post(self, url, **kwargs):
+            if "organization" in kwargs["json"]["author"]:
+                return _FakeResponse({"message": "not enough permissions"}, status_code=403)
+            return _FakeResponse({}, headers={"x-restli-id": "person-share"})
+
+    cfg = dataclasses.replace(base_config, linkedin_org_urn="urn:li:organization:555")
+    monkeypatch.setattr(httpx, "Client", _LinkedInClient)
+    post = Post(pillar="Productivity", platform="linkedin", caption="Focus.")
+    PublisherAgent(cfg).publish(post)
+
+    assert post.status == PostStatus.PUBLISHED.value
+    assert post.platform_post_id == "person-share"
+    assert post.meta["linkedin"]["delivered_to"] == ["personal"]
+
+
+def test_linkedin_organization_only_target(base_config, monkeypatch):
+    """LINKEDIN_POST_TARGETS=organization skips the personal profile entirely."""
+    authors = []
+
+    class _LinkedInClient(_FakeClient):
+        def get(self, url, **kwargs):
+            return _FakeResponse({"sub": "member1"})
+
+        def post(self, url, **kwargs):
+            authors.append(kwargs["json"]["author"])
+            return _FakeResponse({}, headers={"x-restli-id": "org-share"})
+
+    cfg = dataclasses.replace(
+        base_config,
+        linkedin_org_urn="urn:li:organization:555",
+        linkedin_post_targets="organization",
+    )
+    monkeypatch.setattr(httpx, "Client", _LinkedInClient)
+    post = Post(pillar="Productivity", platform="linkedin", caption="Focus.")
+    PublisherAgent(cfg).publish(post)
+
+    assert authors == ["urn:li:organization:555"]
+    assert post.platform_post_id == "org-share"
 
 
 def test_linkedin_attaches_image(base_config, monkeypatch):
