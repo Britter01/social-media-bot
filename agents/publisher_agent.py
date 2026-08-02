@@ -203,6 +203,16 @@ class PublisherAgent:
             post.mark(PostStatus.FAILED, error=f"publish failed on {post.platform}: {detail}")
             raise
 
+        if not post_id and post.meta.get("linkedin", {}).get("page_via_telegram"):
+            # Nothing reached LinkedIn via the API — only the company-page copy
+            # went to Telegram for manual posting. MANUAL_READY (not PUBLISHED)
+            # so the dashboard shows the manual-post buttons and the post isn't
+            # claimed as live when it isn't yet.
+            post.meta["delivery"] = "telegram"
+            post.mark(PostStatus.MANUAL_READY)
+            logger.info("LinkedIn post %s awaiting manual company-page posting", post.id)
+            return post
+
         post.platform_post_id = post_id
         post.published_time = datetime.now(UTC)
         post.mark(PostStatus.PUBLISHED)
@@ -824,6 +834,40 @@ class PublisherAgent:
         up.raise_for_status()
         return asset
 
+    def _linkedin_page_to_telegram(self, post: Post) -> bool:
+        """Deliver the post to Telegram for manual posting on the company page.
+
+        Used when the page can't be published to via the API — which is the
+        normal state for an app without the gated Community Management API
+        product. Best-effort: a failure here is logged and never affects the
+        personal post's outcome.
+        """
+        if not self._cfg.linkedin_page_telegram_fallback:
+            return False
+        try:
+            from core.telegram_notify import send_post_to_telegram
+
+            page_name = self._cfg.brand_name or "company page"
+            sent = send_post_to_telegram(
+                post,
+                Platform.LINKEDIN.value,
+                self._cfg,
+                label_override=f"LinkedIn — {page_name} page",
+            )
+            if sent:
+                logger.info(
+                    "LinkedIn page copy for post %s sent to Telegram for manual posting",
+                    post.id,
+                )
+            else:
+                logger.warning(
+                    "LinkedIn page copy for post %s could not be sent to Telegram", post.id
+                )
+            return sent
+        except Exception:
+            logger.exception("LinkedIn page Telegram fallback failed for post %s", post.id)
+            return False
+
     def _linkedin_share_as(
         self,
         client: httpx.Client,
@@ -939,6 +983,7 @@ class PublisherAgent:
                     )
                 person_id, last_resp = self._linkedin_share_as(client, candidates, post, headers)
 
+            page_via_telegram = False
             if want_org:
                 org_urn = self._linkedin_org_urn(client)
                 if org_urn:
@@ -956,30 +1001,42 @@ class PublisherAgent:
                         )
                         if not want_personal:
                             last_resp = org_resp
-                elif not want_personal:
+                elif not want_personal and not self._cfg.linkedin_page_telegram_fallback:
                     raise PublishError(
                         "LINKEDIN_POST_TARGETS=organization but no company page could be "
                         "resolved: set LINKEDIN_ORG_URN (urn:li:organization:NNNNN)."
                     )
+                if not org_id:
+                    # API publishing to the page isn't available (usually because
+                    # the token lacks w_organization_social, which needs LinkedIn's
+                    # gated Community Management API product). Deliver the finished
+                    # post to Telegram instead so it can be posted to the page by
+                    # hand — the same manual route Instagram already uses.
+                    page_via_telegram = self._linkedin_page_to_telegram(post)
 
-            if not (person_id or org_id):
+            if not (person_id or org_id or page_via_telegram):
                 if last_resp is None:
                     raise PublishError("LinkedIn: no publish target produced a post")
                 logger.error("LinkedIn %s — body: %s", last_resp.status_code, last_resp.text[:500])
                 last_resp.raise_for_status()
                 return ""
 
-            # Record both shares. Only company-page posts expose an analytics
+            # Record every share. Only company-page posts expose an analytics
             # endpoint, so the org share id becomes the primary platform_post_id
             # when it exists — that's the one AnalyticsAgent can read stats for.
             delivered = [n for n, v in (("personal", person_id), ("organization", org_id)) if v]
+            if page_via_telegram:
+                delivered.append("organization (telegram)")
             post.meta["linkedin"] = {
                 "person_post_id": person_id,
                 "org_post_id": org_id,
+                "page_via_telegram": page_via_telegram,
                 "delivered_to": delivered,
             }
             logger.info("LinkedIn post %s delivered to: %s", post.id, ", ".join(delivered))
-            return org_id or person_id
+            # A Telegram-only page delivery has no platform id of its own; the
+            # personal share id (when there is one) stays the post's id.
+            return org_id or person_id or ""
 
     # --- YouTube (Data API v3) ------------------------------------------
 

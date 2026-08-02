@@ -242,6 +242,101 @@ def test_linkedin_company_page_failure_does_not_fail_the_personal_post(base_conf
     assert post.meta["linkedin"]["delivered_to"] == ["personal"]
 
 
+def test_linkedin_page_falls_back_to_telegram(base_config, monkeypatch):
+    """No page API access → the page copy goes to Telegram for manual posting."""
+    import core.telegram_notify as tn
+
+    sent = {}
+
+    def _fake_send(post, platform, cfg, label_override=None):
+        sent["platform"] = platform
+        sent["label"] = label_override
+        return True
+
+    monkeypatch.setattr(tn, "send_post_to_telegram", _fake_send)
+
+    class _LinkedInClient(_FakeClient):
+        def get(self, url, **kwargs):
+            return _FakeResponse({"sub": "member1"})
+
+        def post(self, url, **kwargs):
+            if "organization" in kwargs["json"]["author"]:
+                return _FakeResponse({"message": "not enough permissions"}, status_code=403)
+            return _FakeResponse({}, headers={"x-restli-id": "person-share"})
+
+    cfg = dataclasses.replace(base_config, linkedin_org_urn="urn:li:organization:555")
+    monkeypatch.setattr(httpx, "Client", _LinkedInClient)
+    post = Post(pillar="Productivity", platform="linkedin", caption="Focus.")
+    PublisherAgent(cfg).publish(post)
+
+    # Personal post still published automatically...
+    assert post.status == PostStatus.PUBLISHED.value
+    assert post.platform_post_id == "person-share"
+    # ...and the page copy was delivered for manual posting.
+    assert sent["platform"] == "linkedin"
+    assert "page" in sent["label"]
+    assert post.meta["linkedin"]["page_via_telegram"] is True
+    assert "organization (telegram)" in post.meta["linkedin"]["delivered_to"]
+
+
+def test_linkedin_page_telegram_fallback_can_be_disabled(base_config, monkeypatch):
+    """With the fallback off, a page failure leaves only the personal post."""
+    import core.telegram_notify as tn
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("Telegram must not be used when the fallback is disabled")
+
+    monkeypatch.setattr(tn, "send_post_to_telegram", _boom)
+
+    class _LinkedInClient(_FakeClient):
+        def get(self, url, **kwargs):
+            return _FakeResponse({"sub": "member1"})
+
+        def post(self, url, **kwargs):
+            if "organization" in kwargs["json"]["author"]:
+                return _FakeResponse({"message": "denied"}, status_code=403)
+            return _FakeResponse({}, headers={"x-restli-id": "person-share"})
+
+    cfg = dataclasses.replace(
+        base_config,
+        linkedin_org_urn="urn:li:organization:555",
+        linkedin_page_telegram_fallback=False,
+    )
+    monkeypatch.setattr(httpx, "Client", _LinkedInClient)
+    post = Post(pillar="Productivity", platform="linkedin", caption="Focus.")
+    PublisherAgent(cfg).publish(post)
+
+    assert post.platform_post_id == "person-share"
+    assert post.meta["linkedin"]["page_via_telegram"] is False
+
+
+def test_linkedin_page_only_via_telegram_is_manual_ready(base_config, monkeypatch):
+    """Page-only target with no API access: manual-ready, not falsely 'published'."""
+    import core.telegram_notify as tn
+
+    monkeypatch.setattr(tn, "send_post_to_telegram", lambda *a, **k: True)
+
+    class _LinkedInClient(_FakeClient):
+        def get(self, url, **kwargs):
+            return _FakeResponse({"sub": "member1"})
+
+        def post(self, url, **kwargs):
+            return _FakeResponse({"message": "denied"}, status_code=403)
+
+    cfg = dataclasses.replace(
+        base_config,
+        linkedin_org_urn="urn:li:organization:555",
+        linkedin_post_targets="organization",
+    )
+    monkeypatch.setattr(httpx, "Client", _LinkedInClient)
+    post = Post(pillar="Productivity", platform="linkedin", caption="Focus.")
+    PublisherAgent(cfg).publish(post)
+
+    assert post.status == PostStatus.MANUAL_READY.value
+    assert post.meta["delivery"] == "telegram"
+    assert not post.platform_post_id
+
+
 def test_linkedin_organization_only_target(base_config, monkeypatch):
     """LINKEDIN_POST_TARGETS=organization skips the personal profile entirely."""
     authors = []

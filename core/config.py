@@ -125,6 +125,11 @@ class Config:
     # Where LinkedIn posts go: "both" (default), "personal", or "organization".
     # "both" falls back to personal-only when no company page can be resolved.
     linkedin_post_targets: str = "both"
+    # When the company-page share can't be made via the API (no w_organization_social
+    # scope, no page URN, or LinkedIn rejects it), send the post to Telegram instead
+    # so it can be posted to the page by hand — same pattern as Instagram. Keeps the
+    # page fed without needing the gated Community Management API product.
+    linkedin_page_telegram_fallback: bool = True
 
     youtube_client_id: str | None = None
     youtube_client_secret: str | None = None
@@ -244,6 +249,7 @@ class Config:
             linkedin_author_urn=_get("LINKEDIN_AUTHOR_URN"),
             linkedin_org_urn=_get("LINKEDIN_ORG_URN"),
             linkedin_post_targets=(_get("LINKEDIN_POST_TARGETS", "both") or "both").strip().lower(),
+            linkedin_page_telegram_fallback=_get_bool("LINKEDIN_PAGE_TELEGRAM_FALLBACK", True),
             youtube_client_id=_get("YOUTUBE_CLIENT_ID"),
             youtube_client_secret=_get("YOUTUBE_CLIENT_SECRET"),
             youtube_refresh_token=_get("YOUTUBE_REFRESH_TOKEN"),

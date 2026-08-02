@@ -81,12 +81,15 @@ def send_instagram_post(post, cfg: Config = config) -> bool:
     return send_post_to_telegram(post, "instagram", cfg)
 
 
-def send_post_to_telegram(post, platform: str, cfg: Config = config) -> bool:
+def send_post_to_telegram(
+    post, platform: str, cfg: Config = config, label_override: str | None = None
+) -> bool:
     """Send a post to Telegram for manual native publishing on *platform*.
 
     Generalised version of ``send_instagram_post`` — supports Instagram,
     Facebook, X/Twitter, and LinkedIn. The header text in the Telegram message
-    is adjusted to reflect the target platform.
+    is adjusted to reflect the target platform; pass *label_override* to name a
+    more specific destination (e.g. a particular LinkedIn company page).
 
     Returns True if the notification was sent, False on failure or misconfiguration.
     """
@@ -104,7 +107,7 @@ def send_post_to_telegram(post, platform: str, cfg: Config = config) -> bool:
         "linkedin": "LinkedIn",
         "instagram": "Instagram",
     }
-    platform_label = _PLATFORM_LABELS.get(platform, platform.capitalize())
+    platform_label = label_override or _PLATFORM_LABELS.get(platform, platform.capitalize())
 
     token = cfg.telegram_bot_token
     chat_id = cfg.telegram_chat_id
