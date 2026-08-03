@@ -43,3 +43,6 @@ Thumbs.db
 .claude/*
 !.claude/settings.json
 !.claude/commands/
+# Skills are shared working practice (e.g. logging sessions to Notion HQ),
+# not local scratch — keep them in version control so every session gets them.
+!.claude/skills/
