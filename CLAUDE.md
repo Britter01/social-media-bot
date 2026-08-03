@@ -1,5 +1,43 @@
 # Claude Code Notes — social-media-bot
 
+## Session logging → Notion (Brite Tech Lifestyle HQ)
+
+**Every session that changes code must log itself to the Brite Tech Lifestyle HQ
+in Notion before finishing.** Dean uses that page — not the chat history — as the
+record of what the system does and why, so a change that isn't logged there is
+effectively invisible.
+
+**Find the page** with `notion-search` for "Brite Tech Lifestyle HQ" (don't
+hardcode a page ID — it can change). Look for a "Dev Log" section/database; if
+there isn't one, create a `Dev Log` database on the HQ page with the properties
+below and say so in chat.
+
+**Log one entry per session**, with:
+
+| Field | Contents |
+|-------|----------|
+| Date | Session date |
+| Summary | What changed and, more importantly, **why** — the problem it fixes |
+| Areas | Files/agents touched (e.g. `publisher_agent.py`, LinkedIn) |
+| Commit | Short SHA(s) pushed to `main` |
+| Worker version | The `_WORKER_VERSION` after the change |
+| Action needed | Anything only Dean can do — set a Railway env var, re-authorise a token, approve an API. **Empty if nothing.** |
+
+**Rules**
+
+- Write it in **plain language**, not commit-speak. The entry should make sense to
+  Dean in three months without reading the diff.
+- **Action items are the highest-value part.** A new env var that never gets set
+  means the feature silently does nothing in production — always surface those.
+- **Skip** sessions that changed no code (questions, explanations, investigations
+  that concluded "no change needed").
+- **One entry per session**, not per commit. Amend the entry if more work follows
+  in the same session.
+- **Never** put secrets, tokens, API keys, or personal details in Notion.
+- If the Notion MCP tools aren't connected, **say so in the chat reply** and give
+  Dean the entry text to paste — don't skip it silently and don't claim it was
+  logged.
+
 ## Git workflow
 
 Commit changes **directly to `main`**. Do **not** open feature branches or pull
