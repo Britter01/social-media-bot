@@ -8,27 +8,33 @@ record of what the system does and why, so a change that isn't logged there is
 effectively invisible.
 
 **Find the page** with `notion-search` for "Brite Tech Lifestyle HQ" (don't
-hardcode a page ID — it can change). Look for a "Dev Log" section/database; if
-there isn't one, create a `Dev Log` database on the HQ page with the properties
-below and say so in chat.
+hardcode a page ID — it can change). It links a **Session Log** database — use
+that one; don't create a separate "Dev Log". Read the HQ page's "How Claude
+works with this workspace" child page first if unsure — it's the canonical
+rule and covers every Claude surface, not just Claude Code.
 
-**Log one entry per session**, with:
+**Log one entry per session** (not per commit) to Session Log, using its real
+fields:
 
 | Field | Contents |
 |-------|----------|
+| Entry | One line, plain English, what *happened* — e.g. "LinkedIn now cross-posts to the company page" |
 | Date | Session date |
-| Summary | What changed and, more importantly, **why** — the problem it fixes |
-| Areas | Files/agents touched (e.g. `publisher_agent.py`, LinkedIn) |
-| Commit | Short SHA(s) pushed to `main` |
-| Worker version | The `_WORKER_VERSION` after the change |
-| Action needed | Anything only Dean can do — set a Railway env var, re-authorise a token, approve an API. **Empty if nothing.** |
+| Type | `Fix` / `Deliverable` / `Rule change` / `Decision` / `Research` / `Measurement` |
+| Workstream | Usually `Reels & Social`; add others if touched |
+| Surface | `Claude Code` |
+| What changed | Specifics — files, commit SHAs, worker version, numbers. Not "tidied up the publisher" |
+| Decisions & reasoning | **Highest-value field.** The option chosen, the ones rejected, and why — what a future session can't reconstruct from the diff |
+| Follow-ups | Anything only Dean can do (Railway env var, token re-auth, API approval) or still outstanding. Empty if nothing |
+| Verified | Tick only if you actually checked the outcome afterwards, and say how in "What changed" |
 
 **Rules**
 
 - Write it in **plain language**, not commit-speak. The entry should make sense to
   Dean in three months without reading the diff.
-- **Action items are the highest-value part.** A new env var that never gets set
-  means the feature silently does nothing in production — always surface those.
+- **Follow-ups are the highest-value part after reasoning.** A new env var that
+  never gets set means the feature silently does nothing in production — always
+  surface those.
 - **Skip** sessions that changed no code (questions, explanations, investigations
   that concluded "no change needed").
 - **One entry per session**, not per commit. Amend the entry if more work follows

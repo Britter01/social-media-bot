@@ -22,20 +22,26 @@ there is effectively invisible.**
 ## How to write the entry
 
 1. **Find the page.** `notion-search` for "Brite Tech Lifestyle HQ". Do **not**
-   hardcode a page ID — it can change. Look for a "Dev Log" database or section.
-2. **If no Dev Log exists**, create a `Dev Log` database on the HQ page using the
-   fields below, and say so in the chat reply.
-3. **Add the entry:**
+   hardcode a page ID — it can change.
+2. **Use the Session Log database** the HQ page links to — don't create a
+   separate "Dev Log". If HQ has no Session Log at all, create one with the
+   fields below and say so in the chat reply. Read the HQ's "How Claude works
+   with this workspace" child page first if it exists — it's the canonical,
+   cross-surface version of this rule and takes precedence over this skill if
+   the two ever disagree.
+3. **Add one entry per session**, with these fields:
 
 | Field | Contents |
 |-------|----------|
+| Entry | One line, plain English, what *happened* — not what was discussed |
 | Date | Session date |
-| Project | Which Brite system (e.g. Social Media Bot, Etsy, Pinterest) |
-| Summary | What changed and, more importantly, **why** — the problem it solves |
-| Areas | Files/agents/areas touched (e.g. `publisher_agent.py`, LinkedIn) |
-| Commit | Short SHA(s) pushed |
-| Version | Resulting `_WORKER_VERSION`, where the project has one |
-| Action needed | Anything only Dean can do. **Leave empty if nothing.** |
+| Type | `Fix` / `Deliverable` / `Rule change` / `Decision` / `Research` / `Measurement` / `Automation run` |
+| Workstream | Which Brite area(s) this belongs to (e.g. Reels & Social, Etsy & Pinterest, Ops & Admin) |
+| Surface | `Claude Code`, `Cowork chat`, `Claude app`, `Scheduled task`, or `Design` |
+| What changed | Specifics — files, commit SHAs, resolved worker version, numbers |
+| Decisions & reasoning | **Highest-value field.** The option chosen, options rejected, and why |
+| Follow-ups | Anything only Dean can do (env var, token re-auth, approval), or work still open. Empty if nothing |
+| Verified | Tick only if you actually checked the outcome afterwards, and say how in "What changed" |
 
 ## Rules that matter
 
@@ -43,13 +49,18 @@ there is effectively invisible.**
   without reading the diff. "LinkedIn posts now also go to the business page via
   Telegram, because the API needs an approval we can't get" — not "refactor
   `_publish_linkedin` to multi-target dispatch".
-- **Action items are the highest-value field.** A new env var that never gets set
-  means the feature silently does nothing in production. Always surface: Railway
-  variables to set, tokens to re-authorise, APIs to approve, things to verify.
+- **Decisions & reasoning is what a future session can't reconstruct** from the
+  diff alone — record what was rejected and why, not just what shipped.
+- **Follow-ups are the second highest-value field.** A new env var that never
+  gets set means the feature silently does nothing in production. Always
+  surface: variables to set, tokens to re-authorise, APIs to approve.
 - **Never** write secrets, tokens, API keys, passwords, or personal details into
   Notion. Name the variable (`LINKEDIN_ORG_URN`), never its value.
 - **Honesty over completeness.** If the Notion MCP tools aren't connected, say so
   in the chat reply and give Dean the entry text to paste manually. Never skip it
   silently, and never claim something was logged when it wasn't.
+- **Don't backfill history that predates this rule.** Only sessions from when
+  the logging rule took effect need an entry — don't invent retroactive entries
+  for older, already-shipped commits.
 - **Don't restructure his workspace.** Add entries; don't reorganise, rename, or
   delete existing Notion content without asking.
