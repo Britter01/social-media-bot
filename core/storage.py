@@ -100,3 +100,54 @@ def get_storage(cfg: Config = config) -> Storage:
     if _storage is None:
         _storage = Storage(cfg)
     return _storage
+
+
+def flag_is_set(path: str, *, on_error: bool, attempts: int = 3) -> bool:
+    """Return True if the flag object at ``path`` exists.
+
+    Config flags (pause switches, mode switches) are stored as the mere
+    presence of an object. A *missing* object is an unambiguous "not set" and
+    returns False immediately.
+
+    Anything else — a dropped HTTP/2 connection, a 5xx, Storage being
+    unreachable — is retried up to *attempts* times before falling back to
+    ``on_error``. Callers must choose that fallback deliberately:
+
+    * ``on_error=True`` for a flag that *blocks* an irreversible action (a
+      publishing pause). If we cannot prove the pause is lifted, we must not
+      publish: a delayed post is recoverable, a post the user never wanted
+      is not.
+    * ``on_error=False`` for a flag whose absence is the safe state.
+
+    The retry matters because the process talks to Supabase over a pooled
+    HTTP/2 connection that is periodically terminated server-side; a single
+    read is not a reliable signal.
+    """
+    try:
+        storage = get_storage()
+    except Exception:
+        # Storage isn't configured at all (dev, tests, a local run without
+        # Supabase creds). No flag can exist, so this is "not set" rather than
+        # an outage — failing closed here would wedge every environment that
+        # simply doesn't use Storage.
+        return False
+
+    last_exc: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            return storage.download(path) is not None
+        except Exception as exc:  # noqa: BLE001 — any transport error must retry
+            last_exc = exc
+            if attempt < attempts - 1:
+                import time
+
+                time.sleep(0.5 * (2**attempt))
+    logger.error(
+        "Could not read flag %s after %d attempts — assuming %s. Last error: %s: %s",
+        path,
+        attempts,
+        "SET" if on_error else "NOT SET",
+        type(last_exc).__name__,
+        last_exc,
+    )
+    return on_error

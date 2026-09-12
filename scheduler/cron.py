@@ -1707,7 +1707,7 @@ _TELEGRAM_MODE_PLATFORMS = ("facebook", "twitter", "linkedin")
 _PLATFORM_STATUS_PATH = "config/platform_status.json"
 # Bump when shipping worker changes the dashboard should be able to confirm are
 # live. Surfaced in the sidebar so a stale (un-redeployed) worker is obvious.
-_WORKER_VERSION = "2026-07-16.11"
+_WORKER_VERSION = "2026-07-16.12"
 _NEWS_PLATFORMS_PATH = "config/news_platforms"
 _NEWS_PLATFORM_CHOICES = ("instagram", "facebook", "both")
 
@@ -1836,15 +1836,15 @@ def _is_content_gen_paused() -> bool:
 def _is_platform_paused(platform: str) -> bool:
     """Return True if automatic scheduled publishing is paused for *platform*.
 
-    Fail-open: if Storage is unreachable we assume running.
+    Fails CLOSED: if the flag can't be read after retries we assume paused, so
+    a transient Supabase blip can't publish something the user switched off.
+    A held-back post stays scheduled and goes out on the next run; a post sent
+    while paused cannot be recalled.
     Manual 'Publish Now' calls bypass this check via ignore_platform_pause.
     """
-    try:
-        from core.storage import get_storage
+    from core.storage import flag_is_set
 
-        return get_storage().download(f"{_PLATFORM_PAUSE_PREFIX}{platform}") is not None
-    except Exception:
-        return False
+    return flag_is_set(f"{_PLATFORM_PAUSE_PREFIX}{platform}", on_error=True)
 
 
 def _content_gen_guard(fn):

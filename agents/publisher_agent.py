@@ -415,16 +415,15 @@ class PublisherAgent:
     def _is_platform_publishing_paused(platform: str) -> bool:
         """Return True if automatic publishing is paused for *platform*.
 
-        Reads the same Storage flag the scheduler writes. Fail-open (False) on a
-        Storage error so a transient blip doesn't wedge publishing — the
-        scheduler's own pre-check is the primary guard; this is defense in depth.
+        Reads the same Storage flag the scheduler writes, and fails CLOSED: an
+        unreadable flag counts as paused. This used to fail open, which made
+        the scheduler pre-check and this one useless as "defense in depth" —
+        both read the same flag the same way, so one dropped Supabase
+        connection defeated both at once and a paused post went out.
         """
-        try:
-            from core.storage import get_storage
+        from core.storage import flag_is_set
 
-            return get_storage().download(f"config/platform_paused.{platform}") is not None
-        except Exception:
-            return False
+        return flag_is_set(f"config/platform_paused.{platform}", on_error=True)
 
     @staticmethod
     def _get_platform_telegram_since(platform: str) -> datetime | None:
